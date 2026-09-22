@@ -101,3 +101,5 @@ dotnet run --project .\tests\PresetChecks\PresetChecks.csproj -c Release
 自動チェックはUnity上のUIや入力を実行しません。変更時は、保存・読み込み・削除と各画面の戻る操作、タイトル／フッター復帰、全カテゴリの表示更新、公式の確定・取消、再表示、Transmog併用／単独動作を実機で確認してください。
 
 設計・調査・変更履歴は `docs/` にまとめています。
+
+リリース前のゲーム内確認には、[実機テストケース](docs/MANUAL_TEST_CASES.md)を使用できます。

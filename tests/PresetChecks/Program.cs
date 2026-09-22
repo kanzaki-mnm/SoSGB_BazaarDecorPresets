@@ -44,7 +44,7 @@ Check(Plan(new Slot("OrnamentS", 0, 40), new Slot("OrnamentS", 1, 40)).Count == 
 
 string directory = Path.Combine(Directory.GetCurrentDirectory(), "tests", "artifacts", Guid.NewGuid().ToString("N"));
 Directory.CreateDirectory(directory);
-string path = Path.Combine(directory, "presets.json");
+string path = Path.Combine(directory, PresetStorage.FileName);
 var file = new PresetFile { Presets = new() { new Preset { UiSlotIndex = 1, Name = "料理用 🍳", Slots = current } } };
 PresetStorage.Save(path, file);
 var roundtrip = PresetStorage.Load(path);
@@ -75,4 +75,18 @@ string legacyPath = Path.Combine(directory, "legacy.json");
 File.WriteAllText(legacyPath, System.Text.Json.JsonSerializer.Serialize(legacy));
 Check(PresetStorage.Load(legacyPath).SchemaVersion == 2 && PresetStorage.Load(legacyPath).Presets[0].UiSlotIndex == 1,
     "legacy file migrates in memory to first fixed slot");
+Check(Path.GetFileName(path) == "BazaarDecorPresets.cfg" && !File.Exists(path + ".tmp"),
+    "new cfg path saves JSON without leaving a temporary file");
+string original = File.ReadAllText(path);
+string originalBackup = File.ReadAllText(path + ".bak");
+using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+{
+    bool failed = false;
+    try { PresetStorage.Save(path, file); }
+    catch (IOException) { failed = true; }
+    Check(failed, "locked destination rejects replacement");
+}
+Check(File.ReadAllText(path) == original && File.ReadAllText(path + ".bak") == originalBackup,
+    "failed replacement preserves both current file and backup");
+Check(!File.Exists(path + ".tmp"), "failed replacement cleans up its temporary file");
 Console.WriteLine($"{passed} checks passed.");

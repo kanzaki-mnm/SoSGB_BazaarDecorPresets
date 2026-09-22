@@ -27,9 +27,9 @@ BazaarDecorTransmogの公開API v1が利用できる場合、言語に依存せ�
 
 ## 保存と撤去
 
-プリセットは `BepInEx/config/com.icy.bazaardecorpresets.presets.json` に保存します。更新時の前回内容は `.bak` として残します。
+プリセットは `BepInEx/config/BazaarDecorPresets.cfg` に保存します。中身はJSON形式です。更新時の前回内容は `BazaarDecorPresets.cfg.bak` として残します。安全な置換のため保存中のみ `.tmp` を使い、通常の成功・失敗後は削除します（強制終了や削除失敗時には残る場合があります）。旧ファイル名からの自動移行は行いません。
 
-ゲーム終了後にDLL・`i18n`フォルダ・このJSON・`.bak`を外せば、Mod由来の機能とデータは取り除けます。保存済みの装飾配置はゲーム標準のデータとして残るため、変更したい場合はゲーム内のオブジェ変更で編集してください。
+ゲーム終了後にDLL・`i18n`フォルダ・この `.cfg`・`.bak`を外せば、Mod由来の機能とデータは取り除けます。保存済みの装飾配置はゲーム標準のデータとして残るため、変更したい場合はゲーム内のオブジェ変更で編集してください。
 
 JSONを読み取れない場合は既存ファイルを上書きせず、保存を停止して `LogOutput.log` に `BDP PresetFileError` を記録します。
 
@@ -50,4 +50,4 @@ JSONを読み取れない場合は既存ファイルを上書きせず、保存�
 
 ## 開発確認
 
-`dotnet build .\BazaarDecorPresets.slnx -c Release` と `dotnet run --project tests/PresetChecks -c Release` で確認します。診断専用コードの撤去後は、未使用の旧要約を検証する1項目を除いた23項目です。保存形式、固定6スロット、旧形式の移行、原子的保存とバックアップを確認します。ゲーム内UI・入力は実機確認が必要です。
+`dotnet build .\BazaarDecorPresets.slnx -c Release` と `dotnet run --project tests/PresetChecks -c Release` で確認します。27項目です。新しい保存先での読み書きと、保存先をロックしたI/O失敗時の本体・バックアップ保全、一時ファイルの後片付けも確認します。保存形式、固定6スロット、旧形式の移行、原子的保存とバックアップを確認します。ゲーム内UI・入力は実機確認が必要です。

@@ -29,8 +29,11 @@ internal static partial class NativePresetUi
 
     internal static void Configure()
     {
-        path = Path.Combine(Paths.ConfigPath, "com.icy.bazaardecorpresets.presets.json");
-        try { if (File.Exists(path)) file = PresetStorage.Load(path); }
+        path = Path.Combine(Paths.ConfigPath, PresetStorage.FileName);
+        try
+        {
+            if (File.Exists(path)) file = PresetStorage.Load(path);
+        }
         catch (Exception ex) { storageBlocked = true; Plugin.Logger.LogError("BDP PresetFileError " + ex); }
     }
 

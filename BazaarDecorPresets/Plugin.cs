@@ -7,10 +7,11 @@ using UnityEngine;
 
 namespace BazaarDecorPresets;
 
-[BepInPlugin("com.icy.bazaardecorpresets", "BazaarDecorPresets", "0.6.2")]
+[BepInPlugin("com.icy.bazaardecorpresets", "BazaarDecorPresets", Plugin.Version)]
 [BepInDependency(TransmogBridge.PluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class Plugin : BasePlugin
 {
+    internal const string Version = "1.0.0";
     internal static ManualLogSource Logger = null!;
     private Harmony harmony;
     public override void Load()
@@ -24,7 +25,7 @@ public sealed class Plugin : BasePlugin
             harmony = new Harmony("com.icy.bazaardecorpresets");
             harmony.PatchAll(typeof(Plugin).Assembly);
             AddComponent<NativePresetDriver>();
-            Log.LogInfo("BDP Ready 0.6.2");
+            Log.LogInfo("BDP Ready " + Version);
         }
         catch (Exception ex)
         {

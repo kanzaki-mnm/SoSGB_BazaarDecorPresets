@@ -375,6 +375,11 @@ internal static partial class NativePresetUi
             Plugin.Logger.LogWarning("BDP PresetModelRefreshFailed " + ex);
             modelsUpdated = false;
         }
+        if (result.Status == LayoutApplyStatus.Applied)
+        {
+            try { PresetApplicator.RefreshEffectInfo(page); }
+            catch (Exception ex) { Plugin.Logger.LogWarning("BDP PresetEffectRefreshFailed " + ex); }
+        }
         if (result.Status == LayoutApplyStatus.Restored)
             Notice(modelsUpdated ? "presets.load.failed" : "presets.load.restored.visual.failed", OpenSlots);
         else

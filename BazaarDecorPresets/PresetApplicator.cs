@@ -77,6 +77,22 @@ internal static class PresetApplicator
         return succeeded;
     }
 
+    internal static bool RefreshEffectInfo(UIBazaarCustomPage page)
+    {
+        var effectDetail = page?.bazaarEffectDetail;
+        if (effectDetail == null)
+        {
+            Plugin.Logger.LogWarning("BDP PresetEffectRefreshSkipped detail-unavailable");
+            return false;
+        }
+
+        // The game owns the effect calculation and the displayed labels. Calling
+        // its refresh entry point keeps the unconfirmed editor preview in sync
+        // without writing to the confirmed Bazaar data.
+        effectDetail.OnUpdate();
+        return true;
+    }
+
     private static bool TryCategory(string value, out BazaarCustomItemData.PartsCategory category)
     {
         category = value switch

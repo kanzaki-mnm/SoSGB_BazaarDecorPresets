@@ -188,4 +188,46 @@ var recoveryThrowsAfterWrite = LayoutTransaction.Apply(transactionBefore, transa
 }, () => editState.ToList());
 Check(recoveryThrowsAfterWrite.Status == LayoutApplyStatus.Restored && recoveryThrowsAfterWrite.Errors.Count == 2,
     "verified actual layout governs recovery even when a recovery setter throws after writing");
+string translationDirectory = Path.Combine(Path.GetTempPath(), "BDPTranslations-" + Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(translationDirectory);
+try
+{
+    var catalog = new TranslationCatalog();
+    var warnings = new List<string>();
+    string englishPath = Path.Combine(translationDirectory, "en.json");
+    string japanesePath = Path.Combine(translationDirectory, "ja.json");
+    File.WriteAllText(englishPath, "{\"presets.guide\":\"External English\"}");
+    File.WriteAllText(japanesePath, "{\"presets.guide\":\"日本語\"}");
+    catalog.Load(translationDirectory, warnings.Add);
+    Check(catalog.Get("ja", "presets.guide") == "日本語", "selected translation takes priority");
+    Check(catalog.Get("fr", "presets.guide") == "External English", "missing language uses external English");
+    Check(catalog.Get("ja", "presets.save.completed") == "Preset saved.", "missing keys use embedded English");
+    foreach (string invalidValue in new[] { "null", "\"\"", "\"   \"" })
+    {
+        File.WriteAllText(japanesePath, "{\"presets.guide\":" + invalidValue + "}");
+        catalog.Load(translationDirectory, warnings.Add);
+        Check(catalog.Get("ja", "presets.guide") == "External English", "invalid selected value falls back: " + invalidValue);
+    }
+    File.WriteAllText(englishPath, "{\"presets.guide\":null}");
+    catalog.Load(translationDirectory, warnings.Add);
+    Check(catalog.Get("ja", "presets.guide") == "Presets", "null English value uses embedded English");
+    File.WriteAllText(japanesePath, "broken JSON");
+    File.WriteAllText(englishPath, "null");
+    catalog.Load(translationDirectory, warnings.Add);
+    Check(catalog.Get("ja", "presets.guide") == "Presets" && warnings.Count == 2, "corrupt files warn and use embedded English");
+    catalog.Load(Path.Combine(translationDirectory, "missing"), warnings.Add);
+    Check(catalog.Get("ja", "presets.guide") == "Presets", "missing directory uses embedded English");
+    catalog.Load(translationDirectory, warnings.Add, _ => throw new UnauthorizedAccessException("test"));
+    Check(catalog.Get("ja", "presets.guide") == "Presets", "directory access failure preserves embedded English");
+    var canonical = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(
+        File.ReadAllText("BazaarDecorPresets/i18n/en.json"));
+    Check(canonical.All(pair => !string.IsNullOrWhiteSpace(pair.Value) && catalog.Get("ja", pair.Key) == pair.Value),
+        "embedded resource contains every current English key and value");
+    Check(catalog.Get("ja", "unknown.key") == "unknown.key", "unknown developer key remains identifiable");
+}
+finally
+{
+    foreach (string translationFile in Directory.GetFiles(translationDirectory)) File.Delete(translationFile);
+    Directory.Delete(translationDirectory);
+}
 Console.WriteLine($"{passed} checks passed.");

@@ -6,6 +6,8 @@
     <Nullable>disable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../BazaarDecorPresets/TranslationCatalog.cs" Link="TranslationCatalog.cs" />
+    <EmbeddedResource Include="../../BazaarDecorPresets/i18n/en.json" LogicalName="BazaarDecorPresets.i18n.en.json" />
     <Compile Include="../../BazaarDecorPresets/Presets.cs" Link="Presets.cs" />
     <Compile Include="../../BazaarDecorPresets/LayoutTransaction.cs" Link="LayoutTransaction.cs" />
     <Compile Include="../../BazaarDecorPresets/CleanupActions.cs" Link="CleanupActions.cs" />

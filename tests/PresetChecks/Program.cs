@@ -89,4 +89,54 @@ using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileSha
 Check(File.ReadAllText(path) == original && File.ReadAllText(path + ".bak") == originalBackup,
     "failed replacement preserves both current file and backup");
 Check(!File.Exists(path + ".tmp"), "failed replacement cleans up its temporary file");
+var cleanupError = new InvalidOperationException("injected cleanup failure");
+Exception reported = null;
+bool remainingCleanupRan = false;
+CleanupActions.Run(() => throw cleanupError, error => reported = error);
+CleanupActions.Run(() => remainingCleanupRan = true, _ => throw new Exception("unexpected report"));
+Check(ReferenceEquals(reported, cleanupError) && remainingCleanupRan,
+    "cleanup failure reports original error and permits subsequent cleanup");
+CleanupActions.Run(() => throw cleanupError, _ => throw new IOException("injected logger failure"));
+Check(true, "cleanup logging failure does not escape into the game");
+var closeTracker = new DialogCloseTracker();
+for (int frame = 0; frame < 120; frame++)
+    if (closeTracker.TryBegin(false, out _)) throw new Exception("Closed an absent or foreign dialog");
+Check(closeTracker.TryBegin(true, out int lateClose), "late owned dialog remains eligible after waiting; foreign UI is ignored");
+Check(!closeTracker.TryBegin(true, out _), "closing dialog is not closed twice");
+Check(closeTracker.Complete(lateClose) && !closeTracker.IsClosing, "asynchronous cleanup close completes");
+closeTracker.TryBegin(true, out int normalClose);
+// A fault invalidates navigation, but completion must still release close tracking.
+bool navigationRan = false;
+bool navigationGenerationMatches = false;
+if (closeTracker.Complete(normalClose) && navigationGenerationMatches) navigationRan = true;
+Check(!navigationRan && closeTracker.TryBegin(true, out int nextClose), "fault during normal close cancels navigation without blocking later cleanup");
+closeTracker.Reset();
+closeTracker.TryBegin(true, out int reopenedClose);
+Check(!closeTracker.Complete(normalClose) && closeTracker.IsClosing, "old completion cannot unlock a reopened session");
+Check(closeTracker.Complete(reopenedClose), "new session close completes independently");
+var preparationError = new InvalidOperationException("injected delegate conversion failure");
+bool submitted = false;
+try
+{
+    if (closeTracker.TryPrepare<Action>(true, _ => throw preparationError, out var prepared)) submitted = true;
+    throw new Exception("Expected preparation failure");
+}
+catch (InvalidOperationException ex)
+{
+    Check(ReferenceEquals(ex, preparationError) && !closeTracker.IsClosing && !submitted,
+        "preparation failure preserves exception and releases wait before stock submission");
+}
+Check(closeTracker.TryPrepare<Action>(true, ticket => () => closeTracker.Complete(ticket), out var completePrepared),
+    "cleanup may prepare a new close after conversion failure");
+try { throw new IOException("injected stock close submission failure"); }
+catch (IOException) { }
+Check(closeTracker.IsClosing && !closeTracker.TryPrepare<Action>(true, _ => () => { }, out _),
+    "failure after stock submission retains wait to prevent duplicate close");
+completePrepared();
+Check(!closeTracker.IsClosing, "prepared completion releases its own wait");
+closeTracker.TryBegin(true, out int activeClose);
+bool factoryRan = false;
+Check(!closeTracker.TryPrepare<Action>(true, _ => { factoryRan = true; return () => { }; }, out _) && !factoryRan,
+    "duplicate preparation does not run the delegate factory");
+closeTracker.Complete(activeClose);
 Console.WriteLine($"{passed} checks passed.");

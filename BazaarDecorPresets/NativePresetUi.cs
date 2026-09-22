@@ -42,6 +42,9 @@ internal static partial class NativePresetUi
     internal static void Begin(BazaarManager value)
     {
         generation++;
+        SessionFaulted = false;
+        faultFooterRestored = false;
+        dialogCloseTracker.Reset();
         editor = value;
         sessionActive = true;
         uiManager = null;
@@ -69,10 +72,12 @@ internal static partial class NativePresetUi
     internal static void End()
     {
         generation++;
-        CloseOwnKeyboard();
-        ClearState();
+        Guard(CloseOwnKeyboard);
+        Guard(ClearState);
+        ResetMenuState();
         editor = null;
         sessionActive = false;
+        dialogCloseTracker.Reset();
         uiManager = null;
         page = null;
         footer = null;
@@ -115,14 +120,15 @@ internal static partial class NativePresetUi
     }
 
     internal static bool AppearanceBlocksPresets => TransmogBridge.BlocksPresets(IsAppearanceEditorVisible);
-    private static bool CanEnterPresetMenu => Ready && !open && !AppearanceBlocksPresets && page.IsInputEnable();
-    internal static bool ShouldShowFooterGuide => Ready && !open && !AppearanceBlocksPresets;
+    private static bool CanEnterPresetMenu => !SessionFaulted && Ready && !open && !AppearanceBlocksPresets && page.IsInputEnable();
+    internal static bool ShouldShowFooterGuide => !SessionFaulted && Ready && !open && !AppearanceBlocksPresets;
 
     internal static void Tick()
     {
         if (!sessionActive) return;
         // Unity destruction must release our UI before the idle fast path.
         if (editor == null || (page != null && !editor.IsCustomMode)) { End(); return; }
+        if (SessionFaulted) { TickFaultCleanup(); return; }
         if (returnToSaveSlots)
         {
             // KeyboardManager invokes its cancel callback before its input UI
@@ -202,7 +208,7 @@ internal static partial class NativePresetUi
     internal static void Guard(Action action)
     {
         try { action(); }
-        catch (Exception ex) { Plugin.Logger.LogError("BDP NativeUiError " + ex); Abort(); }
+        catch (Exception ex) { ReportFault(ex); }
     }
 
     private static void Open()
@@ -218,7 +224,7 @@ internal static partial class NativePresetUi
     private static void OpenMainMenu()
     {
         var ui = GetUiManager();
-        if (!Ready || AppearanceBlocksPresets || (!open && !page.IsInputEnable()) || ui == null || ui.IsDialog) return;
+        if (SessionFaulted || !Ready || AppearanceBlocksPresets || (!open && !page.IsInputEnable()) || ui == null || ui.IsDialog) return;
         if (!open) CaptureEditorFooterGuide();
         open = true;
         slotMenuOpen = false;
@@ -275,7 +281,7 @@ internal static partial class NativePresetUi
         nameCallback = DelegateSupport.ConvertDelegate<KeyboardManager.InputCompleteCallback>((Action<KeyboardManager.Result, string>)((result, text) =>
         { if (ticket == generation) Guard(() => SaveName(result, text)); }));
         nameCancelled = DelegateSupport.ConvertDelegate<Il2CppSystem.Action>((Action)(() =>
-        { if (ticket == generation) ReturnToSaveSlots(); }));
+        { if (ticket == generation) Guard(ReturnToSaveSlots); }));
         nameInputOpen = true;
         nameFooterRequested = false;
         keyboard.ShowRequest(KeyboardManager.KeyboardType.BuyPetAnimal, "", nameCallback, nameCancelled, false, true);
@@ -395,9 +401,12 @@ internal static partial class NativePresetUi
         noticeCallback = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<int>>((Action<int>)(_ =>
         {
             if (ticket != generation) return;
-            completionNoticeOpen = false;
-            completionFooterRequested = false;
-            CloseDialog(after);
+            Guard(() =>
+            {
+                completionNoticeOpen = false;
+                completionFooterRequested = false;
+                CloseDialog(after);
+            });
         }));
         var choices = new ChoicesData(new Il2CppSystem.Collections.Generic.List<uint>(), noticeCallback, LocalizeTextTableType.DialogChoiceText);
         var data = new UIDefaultDialogData(UiTextIds.Notice, choices, new Il2CppStringArray(0L));
@@ -417,7 +426,15 @@ internal static partial class NativePresetUi
         var ui = GetUiManager();
         if (ui == null) { after?.Invoke(); return; }
         int ticket = generation;
-        var callback = DelegateSupport.ConvertDelegate<Il2CppSystem.Action>((Action)(() => { if (ticket == generation) after?.Invoke(); }));
+        if (!dialogCloseTracker.TryPrepare(true, closeTicket =>
+            DelegateSupport.ConvertDelegate<Il2CppSystem.Action>((Action)(() =>
+        {
+            // Release the close even if a fault invalidated the navigation callback.
+            if (!dialogCloseTracker.Complete(closeTicket)) return;
+            if (ticket == generation) Guard(() => after?.Invoke());
+        })), out var callback)) return;
+        // After submission, a thrown API call may already have started closing.
+        // Only the completion callback or session reset may release that wait.
         ui.CloseDialog(null, callback, true, true, false);
     }
 
@@ -431,6 +448,12 @@ internal static partial class NativePresetUi
     private static void ClearState()
     {
         RestorePresetTitle();
+        ResetMenuState();
+        RemoveObjectPreview();
+    }
+
+    private static void ResetMenuState()
+    {
         open = slotMenuOpen = nameInputOpen = completionNoticeOpen = returnToSaveSlots = nameFooterRequested = slotFooterRequested = completionFooterRequested = false;
         noDialogFrames = 0;
         selectedSlot = -1;
@@ -440,7 +463,6 @@ internal static partial class NativePresetUi
         nameCallback = null;
         nameCancelled = null;
         slotDialog = null;
-        RemoveObjectPreview();
     }
 
     private static void ReturnToSaveSlots()
@@ -582,8 +604,22 @@ internal static class NativePresetLocalization
 {
     static bool Prefix(LanguageManager __instance, LocalizeTextTableType tableType, uint textId, ref string __result)
     {
-        if (!NativePresetUi.TryGetText(__instance, tableType, textId, out var text)) return true;
-        __result = text;
-        return false;
+        try
+        {
+            if (!NativePresetUi.TryGetText(__instance, tableType, textId, out var text)) return true;
+            __result = text;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            NativePresetUi.ReportFault(ex);
+            // Never send our synthetic IDs into the stock text database.
+            if (textId >= UiTextIds.MenuSave && textId <= UiTextIds.DeleteConfirm)
+            {
+                __result = "Presets";
+                return false;
+            }
+            return true;
+        }
     }
 }

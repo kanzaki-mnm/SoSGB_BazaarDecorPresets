@@ -287,7 +287,7 @@ internal static partial class NativePresetUi
 
     private static void OnSlotChoice(int choice)
     {
-        RemoveObjectPreview();
+        RemoveObjectPreview(false);
         slotMenuOpen = false;
         slotFooterRequested = false;
         slotDialog = null;
@@ -475,7 +475,7 @@ internal static partial class NativePresetUi
     private static void CloseDialog(Action after)
     {
         var ui = GetUiManager();
-        if (ui == null) { uiCallbacks.Invalidate(); after?.Invoke(); return; }
+        if (ui == null) { uiCallbacks.Invalidate(); RestoreClosedSlotDialogPosition(); after?.Invoke(); return; }
         int ticket = generation;
         if (!dialogCloseTracker.TryPrepare(true, closeTicket =>
         {
@@ -485,7 +485,12 @@ internal static partial class NativePresetUi
             {
                 // Stock closing must finish even when navigation has been retired.
                 if (!dialogCloseTracker.Complete(closeTicket)) return;
-                if (ticket == generation && uiCallbacks.TryConsume(request)) Guard(() => after?.Invoke());
+                Guard(() =>
+                {
+                    // Restore before navigation can reuse the pooled select dialog.
+                    RestoreClosedSlotDialogPosition();
+                    if (ticket == generation && uiCallbacks.TryConsume(request)) after?.Invoke();
+                });
             }));
         }, out var callback)) return;
         // After submission, a thrown API call may already have started closing.
@@ -690,7 +695,7 @@ internal static partial class NativePresetUi
         selectedSlot = index + 1;
         slotMenuOpen = false;
         slotFooterRequested = false;
-        RemoveObjectPreview();
+        RemoveObjectPreview(false);
         CloseDialog(OpenDeleteConfirmation);
         return true;
     }

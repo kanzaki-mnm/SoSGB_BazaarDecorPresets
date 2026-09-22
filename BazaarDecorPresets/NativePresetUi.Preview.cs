@@ -3,6 +3,7 @@ using BokuMono.Data;
 using Il2CppInterop.Runtime;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace BazaarDecorPresets;
 
@@ -15,6 +16,8 @@ internal static partial class NativePresetUi
     private static GameObject objectPreview;
     private static RectTransform shiftedDialog;
     private static Vector2 originalDialogPosition;
+    private static RectTransform closingShiftedDialog;
+    private static Vector2 closingDialogOriginalPosition;
     private static UICustomPartsListItem[] previewRows;
     private static BazaarCustomPageCategory[] previewOrder;
     private static int previewSlot = int.MinValue;
@@ -65,7 +68,7 @@ internal static partial class NativePresetUi
         var sourceRows = officialRows.ToArray();
         if (sourceRows.Any(row => row == null) || sourceRows.Select(row => row.GetInstanceID()).Distinct().Count() != sourceRows.Length)
             throw new InvalidOperationException("Official preview rows are missing or duplicated.");
-        var source = sourceRows[0].transform.parent;
+        var source = FindPreviewPanel(pagePrefab.transform, sourceRows);
         var dialogRect = dialog.GetComponent<RectTransform>();
         if (source == null || dialogRect?.parent == null) return;
         // Paths are derived from the official references for this exact clone,
@@ -93,6 +96,32 @@ internal static partial class NativePresetUi
         originalDialogPosition = dialogRect.anchoredPosition;
         dialogRect.anchoredPosition = originalDialogPosition + new Vector2(SlotDialogOffsetX, 0f);
         group.alpha = visibleAlpha;
+    }
+
+    private static Transform FindPreviewPanel(Transform pageRoot, UICustomPartsListItem[] rows)
+    {
+        if (rows.Any(row => row.transform == pageRoot || !row.transform.IsChildOf(pageRoot)))
+            throw new InvalidOperationException("Official preview row is outside its page.");
+
+        Transform panel = null;
+        // A wrapper may be inserted above a row. Identify the panel's role rather
+        // than its name or distance from that row, without cloning the whole page.
+        for (var candidate = rows[0].transform.parent; candidate != null && candidate != pageRoot; candidate = candidate.parent)
+        {
+            if (candidate.GetComponent<RectTransform>() == null ||
+                candidate.GetComponent<Image>() == null ||
+                candidate.GetComponent<VerticalLayoutGroup>() == null ||
+                rows.Any(row => !row.transform.IsChildOf(candidate))) continue;
+            if (panel != null) throw new InvalidOperationException("Official preview panel is ambiguous.");
+            panel = candidate;
+        }
+        if (panel == null) throw new InvalidOperationException("Official preview panel is unavailable.");
+        // Reject an enclosing panel with extra rows before instantiating any UI.
+        var containedRows = panel.GetComponentsInChildren<UICustomPartsListItem>(true);
+        var officialIds = new HashSet<int>(rows.Select(row => row.GetInstanceID()));
+        if (containedRows.Length != rows.Length || containedRows.Any(row => !officialIds.Contains(row.GetInstanceID())))
+            throw new InvalidOperationException("Official preview panel contains unexpected rows.");
+        return panel;
     }
 
     private static int[] PreviewRowPath(Transform root, Transform row)
@@ -183,9 +212,19 @@ internal static partial class NativePresetUi
         }
     }
 
-    private static void RemoveObjectPreview()
+    private static void RemoveObjectPreview(bool restoreDialogPosition = true)
     {
-        if (shiftedDialog != null) shiftedDialog.anchoredPosition = originalDialogPosition;
+        if (restoreDialogPosition) RestoreClosedSlotDialogPosition();
+        if (shiftedDialog != null)
+        {
+            if (restoreDialogPosition) shiftedDialog.anchoredPosition = originalDialogPosition;
+            else
+            {
+                // The pooled dialog must stay left until its closing animation ends.
+                closingShiftedDialog = shiftedDialog;
+                closingDialogOriginalPosition = originalDialogPosition;
+            }
+        }
         shiftedDialog = null;
         if (objectPreview != null) UnityEngine.Object.Destroy(objectPreview);
         objectPreview = null;
@@ -193,5 +232,14 @@ internal static partial class NativePresetUi
         previewOrder = null;
         previewSlot = int.MinValue;
         previewLoadRequested = false;
+    }
+
+    private static void RestoreClosedSlotDialogPosition()
+    {
+        if (closingShiftedDialog != null)
+        {
+            closingShiftedDialog.anchoredPosition = closingDialogOriginalPosition;
+        }
+        closingShiftedDialog = null;
     }
 }

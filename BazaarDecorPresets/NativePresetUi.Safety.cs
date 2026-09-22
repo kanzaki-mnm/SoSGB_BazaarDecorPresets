@@ -27,6 +27,8 @@ internal static partial class NativePresetUi
             if (shiftedDialog != null) shiftedDialog.anchoredPosition = originalDialogPosition;
         });
         shiftedDialog = null;
+        CleanupStep("closing-preview-position", RestoreClosedSlotDialogPosition);
+        closingShiftedDialog = null;
         CleanupStep("preview", () =>
         {
             if (objectPreview != null) UnityEngine.Object.Destroy(objectPreview);

@@ -30,6 +30,7 @@ public sealed class PresetFile
 
 public static class PresetStorage
 {
+    public const string FileName = "BazaarDecorPresets.cfg";
     public static readonly string[] Categories = { "Tent", "Shelf", "OrnamentS", "OrnamentL", "OrnamentSp" };
     public static void Validate(PresetFile file)
     {
@@ -74,13 +75,23 @@ public static class PresetStorage
         Validate(file);
         string temp = path + ".tmp";
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+        bool ownsTemp = false;
+        try
         {
-            JsonSerializer.Serialize(stream, file, new JsonSerializerOptions { WriteIndented = true });
-            stream.Flush(true);
+            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                ownsTemp = true;
+                JsonSerializer.Serialize(stream, file, new JsonSerializerOptions { WriteIndented = true });
+                stream.Flush(true);
+            }
+            if (File.Exists(path)) File.Replace(temp, path, path + ".bak");
+            else File.Move(temp, path);
         }
-        if (File.Exists(path)) File.Replace(temp, path, path + ".bak");
-        else File.Move(temp, path);
+        finally
+        {
+            // Cleanup must not hide the original save error.
+            try { if (ownsTemp) File.Delete(temp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
     }
 
     public static Preset At(PresetFile file, int slot) => file.Presets.FirstOrDefault(p => p.UiSlotIndex == slot);

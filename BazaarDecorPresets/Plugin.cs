@@ -2,7 +2,6 @@ using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
 using BokuMono;
-using BokuMono.Data;
 using HarmonyLib;
 using UnityEngine;
 
@@ -17,20 +16,20 @@ public sealed class Plugin : BasePlugin
     public override void Load()
     {
         Logger = Log;
-        Localization.Load();
-        TransmogBridge.Initialize();
-        NativePresetUi.Configure();
-        harmony = new Harmony("com.icy.bazaardecorpresets");
         try
         {
+            Localization.Load();
+            TransmogBridge.Initialize();
+            NativePresetUi.Configure();
+            harmony = new Harmony("com.icy.bazaardecorpresets");
             harmony.PatchAll(typeof(Plugin).Assembly);
             AddComponent<NativePresetDriver>();
-            Log.LogInfo("BDP Ready 0.6.2; use + from the decor editor to open presets; F8 debug shortcut removed.");
+            Log.LogInfo("BDP Ready 0.6.2");
         }
         catch (Exception ex)
         {
-            harmony.UnpatchSelf();
-            Log.LogError(ex);
+            NativePresetUi.ReportFault(ex);
+            NativePresetUi.CleanupStep("startup-patches", () => harmony?.UnpatchSelf());
         }
     }
 }
@@ -44,31 +43,31 @@ public sealed class NativePresetDriver : MonoBehaviour
 [HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.OpenBazaarCustomMenu))]
 internal static class EditorOpening
 {
-    static void Prefix(BazaarManager __instance) => NativePresetUi.Begin(__instance);
+    static void Prefix(BazaarManager __instance) => NativePresetUi.Guard(() => NativePresetUi.Begin(__instance));
 }
 
 [HarmonyPatch(typeof(UIBazaarCustomPage), nameof(UIBazaarCustomPage.PostShow))]
 internal static class PageShown
 {
-    static void Postfix(UIBazaarCustomPage __instance) => NativePresetUi.Observe(__instance);
+    static void Postfix(UIBazaarCustomPage __instance) => NativePresetUi.Guard(() => NativePresetUi.Observe(__instance));
 }
 
 [HarmonyPatch(typeof(UIBazaarCustomPage), nameof(UIBazaarCustomPage.ShowPage))]
 internal static class PagePreparing
 {
-    static void Prefix(UIBazaarCustomPage __instance) => NativePresetUi.Observe(__instance);
+    static void Prefix(UIBazaarCustomPage __instance) => NativePresetUi.Guard(() => NativePresetUi.Observe(__instance));
 }
 
 [HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.SaveAndCloseBazaarCustom))]
 internal static class EditorSave
 {
-    static void Prefix() => NativePresetUi.End("confirm");
+    static void Prefix() => NativePresetUi.Guard(NativePresetUi.End);
 }
 
 [HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.CloseBazaarCustom))]
 internal static class EditorCancel
 {
-    static void Prefix() => NativePresetUi.End("cancel");
+    static void Prefix() => NativePresetUi.Guard(NativePresetUi.End);
 }
 
 [HarmonyPatch(typeof(UIMenuFooter), nameof(UIMenuFooter.SortGuide))]
@@ -76,12 +75,18 @@ internal static class PresetFooterGuide
 {
     static void Postfix(ref Il2CppSystem.Collections.Generic.List<UIButtonGuideData> __result)
     {
+        try { Update(__result); }
+        catch (Exception ex) { NativePresetUi.ReportFault(ex); }
+    }
+
+    private static void Update(Il2CppSystem.Collections.Generic.List<UIButtonGuideData> __result)
+    {
         if (__result == null) return;
         // Remove only our entry, never another Mod's Start guide.
         for (int i = __result.Count - 1; i >= 0; i--)
             if (__result[i] != null && __result[i].button == GuideKey.Start &&
                 __result[i].textId == UiTextIds.FooterPresets) __result.RemoveAt(i);
-        if (NativePresetUi.AppearanceBlocksPresets) return;
+        if (NativePresetUi.SessionFaulted || NativePresetUi.AppearanceBlocksPresets) return;
         if (NativePresetUi.IsCompletionNoticeOpen)
         {
             bool hasConfirm = false;
@@ -128,22 +133,105 @@ internal static class PresetStartInput
 {
     static bool Prefix(ControllableUI __instance)
     {
-        if (!NativePresetUi.CanOpenFromStart(__instance)) return true;
-        NativePresetUi.Guard(NativePresetUi.OpenFromStart);
-        return false;
+        bool claimed = false;
+        try
+        {
+            if (!NativePresetUi.CanOpenFromStart(__instance)) return true;
+            claimed = true;
+            NativePresetUi.OpenFromStart();
+            return false;
+        }
+        catch (Exception ex) { NativePresetUi.ReportFault(ex); return !claimed; }
     }
 }
 
 [HarmonyPatch(typeof(ControllableUI), nameof(ControllableUI.OnNorth))]
 internal static class PresetDeleteInput
 {
-    static bool Prefix() => !NativePresetUi.TryOpenDeleteForFocusedSlot();
+    static bool Prefix(ControllableUI __instance)
+    {
+        if (NativePresetUi.SessionFaulted) return true;
+        bool owned = false;
+        try
+        {
+            // Already-dispatched Y can outlive the input-enable check.
+            owned = NativePresetUi.ShouldBlockEditorInput(__instance);
+            if (owned) return false;
+            owned = NativePresetUi.OwnsSlotInput(__instance);
+            return !owned || !NativePresetUi.TryOpenDeleteForFocusedSlot();
+        }
+        catch (Exception ex) { NativePresetUi.ReportFault(ex); return !owned; }
+    }
+}
+
+// Use stock eligibility for navigation and buttons, scoped to the editor tree.
+// Icon contents override the base eligibility method independently of the page.
+[HarmonyPatch]
+internal static class PresetEditorInputEligibility
+{
+    static System.Collections.Generic.IEnumerable<System.Reflection.MethodBase> TargetMethods()
+    {
+        yield return AccessTools.DeclaredMethod(typeof(UIBazaarCustomPage), nameof(UIBazaarCustomPage.IsInputEnable));
+        yield return AccessTools.DeclaredMethod(typeof(UIIconContent), nameof(UIIconContent.IsInputEnable));
+    }
+
+    static void Postfix(ControllableUI __instance, ref bool __result)
+    {
+        if (!__result) return;
+        try { if (NativePresetUi.ShouldBlockEditorInput(__instance)) __result = false; }
+        catch (Exception ex) { NativePresetUi.ReportFault(ex); }
+    }
+}
+
+[HarmonyPatch(typeof(ControllableUI), nameof(ControllableUI.OnSouth))]
+internal static class PresetBackgroundCancelGuard
+{
+    static bool Prefix(ControllableUI __instance)
+    {
+        bool blocked = false;
+        try
+        {
+            blocked = NativePresetUi.ShouldBlockEditorInput(__instance);
+            return !blocked;
+        }
+        catch (Exception ex)
+        {
+            NativePresetUi.ReportFault(ex);
+            return !blocked;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(ControllableUI), nameof(ControllableUI.OnSouth))]
+internal static class PresetNameChoiceCancel
+{
+    static bool Prefix(ControllableUI __instance)
+    {
+        bool owned = false;
+        try
+        {
+            var keyboard = NativePresetUi.GetOwnNameChoiceKeyboard(__instance);
+            if (keyboard == null) return true;
+            owned = true;
+            return NativePresetUi.PrepareNameChoiceCancel(keyboard);
+        }
+        catch (Exception ex)
+        {
+            NativePresetUi.ReportFault(ex);
+            return !owned;
+        }
+    }
 }
 
 [HarmonyPatch(typeof(UIDialog), nameof(UIDialog.OnDecide))]
 internal static class PresetEmptyLoadSlotGuard
 {
-    static bool Prefix(UIDialog __instance, int id) => !NativePresetUi.TryConsumeEmptyLoadChoice(__instance, id);
+    static bool Prefix(UIDialog __instance, int id)
+    {
+        if (NativePresetUi.SessionFaulted) return true;
+        try { return !NativePresetUi.TryConsumeEmptyLoadChoice(__instance, id); }
+        catch (Exception ex) { NativePresetUi.ReportFault(ex); return false; }
+    }
 }
 
 // BuyPetAnimal normally disables B / Esc. Lift that restriction only while
@@ -153,7 +241,8 @@ internal static class PresetNameInputCancel
 {
     static void Postfix(KeyboardManager __instance, ref bool __result)
     {
-        if (NativePresetUi.IsOwnNameInput(__instance)) __result = false;
+        try { if (NativePresetUi.IsOwnNameInput(__instance)) __result = false; }
+        catch (Exception ex) { NativePresetUi.ReportFault(ex); }
     }
 }
 
@@ -162,56 +251,7 @@ internal static class PresetCompletionDialogConfirm
 {
     static void Postfix(UIDefaultDialog __instance, ref bool __result)
     {
-        if (NativePresetUi.OwnsCompletionNotice(__instance)) __result = true;
+        try { if (NativePresetUi.OwnsCompletionNotice(__instance)) __result = true; }
+        catch (Exception ex) { NativePresetUi.ReportFault(ex); }
     }
-}
-
-[HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.SetCustomParts))]
-internal static class DiagnosticSetCustomParts
-{
-    static void Postfix(BazaarManager __instance, uint itemId, BazaarCustomItemData.PartsCategory category, int index) =>
-        LayoutDiagnostics.SetCustomParts(__instance, itemId, category, index);
-}
-
-[HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.LoadBazaarCustomPartsModel))]
-internal static class DiagnosticModelLoad
-{
-    static void Postfix(BazaarManager __instance) => LayoutDiagnostics.ModelLoad(__instance);
-}
-
-[HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.SetupPartsBuff))]
-internal static class DiagnosticBuffSetup
-{
-    static void Postfix(BazaarManager __instance) => LayoutDiagnostics.SetupBuff(__instance);
-}
-
-[HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.GetEditCustomPartsEffectList),
-    new[] { typeof(CustomPartsCompositeLevel), typeof(CustomPartsBuffParam) })]
-internal static class DiagnosticEffectRead
-{
-    static void Postfix(BazaarManager __instance) => LayoutDiagnostics.ReadEffects(__instance);
-}
-
-[HarmonyPatch(typeof(BazaarMyShop), nameof(BazaarMyShop.RefreshBazaarPartsModel),
-    new[] { typeof(uint), typeof(BazaarCustomItemData.PartsCategory), typeof(int), typeof(bool), typeof(bool) })]
-internal static class DiagnosticShopModelRefresh
-{
-    static void Postfix(uint itemId, BazaarCustomItemData.PartsCategory category, int index, bool isCreate, bool isEdit) =>
-        LayoutDiagnostics.ShopModel("RefreshBazaarPartsModel", itemId, category, index, isCreate, isEdit);
-}
-
-[HarmonyPatch(typeof(BazaarMyShop), nameof(BazaarMyShop.SetBazaarPartsModel),
-    new[] { typeof(uint), typeof(BazaarCustomItemData.PartsCategory), typeof(int), typeof(bool), typeof(bool) })]
-internal static class DiagnosticShopModelSet
-{
-    static void Postfix(uint itemId, BazaarCustomItemData.PartsCategory category, int index, bool isCreate, bool isEdit) =>
-        LayoutDiagnostics.ShopModel("SetBazaarPartsModel", itemId, category, index, isCreate, isEdit);
-}
-
-[HarmonyPatch(typeof(BazaarMyShop), nameof(BazaarMyShop.LoadBazaarPartsModel),
-    new[] { typeof(uint), typeof(BazaarCustomItemData.PartsCategory), typeof(int), typeof(Il2CppSystem.Action<GameObject>), typeof(Il2CppSystem.Action) })]
-internal static class DiagnosticShopModelLoad
-{
-    static void Postfix(uint itemId, BazaarCustomItemData.PartsCategory category, int index) =>
-        LayoutDiagnostics.ShopModel("LoadBazaarPartsModel", itemId, category, index, false, false);
 }

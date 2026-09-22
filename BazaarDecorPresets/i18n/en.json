@@ -11,6 +11,10 @@
   "presets.delete.guide": "Delete",
   "presets.delete.confirm": "Delete preset \"{0}\"?",
   "presets.load.failed": "Could not load the preset. The layout from before loading was restored. Check the log.",
+  "presets.load.rejected": "Could not load the preset. The layout has not changed.",
+  "presets.load.recovery.failed": "The previous layout could not be restored.\nCancel the decor changes without confirming.",
+  "presets.load.visual.failed": "The layout was loaded, but its visual preview could not be updated.",
+  "presets.load.restored.visual.failed": "The previous layout was restored, but its visual preview could not be updated.",
   "presets.storage.blocked": "Preset data could not be read, so saving is unavailable. Check the log.",
   "save.failed": "Could not save. Check the log."
 }

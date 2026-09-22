@@ -75,7 +75,4 @@ string legacyPath = Path.Combine(directory, "legacy.json");
 File.WriteAllText(legacyPath, System.Text.Json.JsonSerializer.Serialize(legacy));
 Check(PresetStorage.Load(legacyPath).SchemaVersion == 2 && PresetStorage.Load(legacyPath).Presets[0].UiSlotIndex == 1,
     "legacy file migrates in memory to first fixed slot");
-var summary = PresetSummary.Describe(file.Presets[0], true);
-Check(summary.Contains("料理用 🍳") && summary.Contains("テント 1") && summary.Contains("小物 2"),
-    "read-only summary groups saved slots by category");
 Console.WriteLine($"{passed} checks passed.");

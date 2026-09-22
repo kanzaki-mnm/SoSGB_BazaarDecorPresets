@@ -7,6 +7,5 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../BazaarDecorPresets/Presets.cs" Link="Presets.cs" />
-    <Compile Include="../../BazaarDecorPresets/PresetSummary.cs" Link="PresetSummary.cs" />
   </ItemGroup>
 </Project>

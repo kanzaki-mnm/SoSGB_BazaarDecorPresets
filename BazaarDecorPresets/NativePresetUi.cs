@@ -37,7 +37,6 @@ internal static partial class NativePresetUi
     internal static void Begin(BazaarManager value)
     {
         generation++;
-        LayoutDiagnostics.Begin(value);
         editor = value;
         page = null;
         footer = null;
@@ -60,10 +59,8 @@ internal static partial class NativePresetUi
         if (!footerRefreshed) footerRefreshPending = true;
     }
 
-    internal static void End(string reason)
+    internal static void End()
     {
-        var closingEditor = editor;
-        LayoutDiagnostics.EditorClosing(closingEditor, reason, DescribeObservedLayout(closingEditor));
         generation++;
         CloseOwnKeyboard();
         ClearState();
@@ -74,27 +71,10 @@ internal static partial class NativePresetUi
         footerRefreshPending = footerRefreshed = false;
         footerRestorePending = false;
         editorGuideId = footerRestoreFrame = -1;
-        Plugin.Logger.LogInfo("BDP NativeEditorExit " + reason);
     }
 
     private static bool Ready => editor != null && editor.IsCustomMode && editor.editCustomData != null && page != null &&
         page.IsActive && page.gameObject.activeInHierarchy && Time.frameCount >= readyFrame;
-
-    internal static string DescribeObservedLayout(BazaarManager value)
-    {
-        if (value == null || value.editCustomData?.PutPartsDataDic == null) return "unavailable";
-        var groups = value.editCustomData.PutPartsDataDic;
-        var parts = new List<string>();
-        for (int g = 0; g < groups.Count; g++)
-        {
-            var group = groups[g];
-            if (group?.DataDic == null) continue;
-            var ids = new List<string>();
-            for (int i = 0; i < group.DataDic.Count; i++) ids.Add(group.DataDic[i].ToString());
-            parts.Add(group.Category + "=[" + string.Join(",", ids) + "]");
-        }
-        return string.Join(";", parts);
-    }
 
     // Appearance mode is implemented by another UI layer on the same stock
     // page, so BazaarManager.IsCustomMode alone intentionally remains true.
@@ -131,8 +111,7 @@ internal static partial class NativePresetUi
 
     internal static void Tick()
     {
-        LayoutDiagnostics.Tick();
-        if (editor != null && page != null && !editor.IsCustomMode) { End("closed"); return; }
+        if (editor != null && page != null && !editor.IsCustomMode) { End(); return; }
         if (returnToSaveSlots)
         {
             // KeyboardManager invokes its cancel callback before its input UI
@@ -177,7 +156,6 @@ internal static partial class NativePresetUi
         try
         {
             footer.SetGuide((KeyButtonGuideMasterId)(uint)footer.LastGuideId);
-            Plugin.Logger.LogInfo("BDP FooterRefreshed");
         }
         catch (Exception ex)
         {
@@ -203,7 +181,6 @@ internal static partial class NativePresetUi
         try
         {
             footer.SetGuide((KeyButtonGuideMasterId)(uint)editorGuideId);
-            Plugin.Logger.LogInfo("BDP FooterRestored");
         }
         catch (Exception ex)
         {
@@ -309,7 +286,6 @@ internal static partial class NativePresetUi
         {
             PresetStorage.Save(path, candidate);
             file = candidate;
-            Plugin.Logger.LogInfo($"BDP PresetSaved slot={selectedSlot} name={name}");
             Notice("presets.save.completed", FinishMenu);
         }
         catch (Exception ex) { Plugin.Logger.LogError("BDP PresetSaveError " + ex); Notice("save.failed", OpenSlots); }
@@ -329,7 +305,6 @@ internal static partial class NativePresetUi
             {
                 var plan = PresetApplicator.Plan(page, preset, beforeLoad);
                 PresetApplicator.Apply(editor, beforeLoad, plan, Snapshot);
-                Plugin.Logger.LogInfo($"BDP PresetLoaded slot={selectedSlot} name={preset.Name} slots={plan.Count}");
                 Notice("presets.load.completed", FinishMenu);
             }
             catch (Exception ex)

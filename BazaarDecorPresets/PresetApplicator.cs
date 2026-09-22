@@ -97,7 +97,6 @@ internal static class PresetApplicator
                 Plugin.Logger.LogWarning($"BDP PresetModelRefreshFailed {slot.Category}:{slot.Index} {ex.Message}");
             }
         }
-        Plugin.Logger.LogInfo($"BDP PresetModelsRefreshed slots={changed.Count}");
     }
 
     private static bool SameLayout(IReadOnlyList<Slot> left, IReadOnlyList<Slot> right) =>

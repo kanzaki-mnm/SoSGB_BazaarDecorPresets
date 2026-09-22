@@ -2,7 +2,6 @@ using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
 using BokuMono;
-using BokuMono.Data;
 using HarmonyLib;
 using UnityEngine;
 
@@ -25,7 +24,7 @@ public sealed class Plugin : BasePlugin
         {
             harmony.PatchAll(typeof(Plugin).Assembly);
             AddComponent<NativePresetDriver>();
-            Log.LogInfo("BDP Ready 0.6.2; use + from the decor editor to open presets; F8 debug shortcut removed.");
+            Log.LogInfo("BDP Ready 0.6.2");
         }
         catch (Exception ex)
         {
@@ -62,13 +61,13 @@ internal static class PagePreparing
 [HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.SaveAndCloseBazaarCustom))]
 internal static class EditorSave
 {
-    static void Prefix() => NativePresetUi.End("confirm");
+    static void Prefix() => NativePresetUi.End();
 }
 
 [HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.CloseBazaarCustom))]
 internal static class EditorCancel
 {
-    static void Prefix() => NativePresetUi.End("cancel");
+    static void Prefix() => NativePresetUi.End();
 }
 
 [HarmonyPatch(typeof(UIMenuFooter), nameof(UIMenuFooter.SortGuide))]
@@ -164,54 +163,4 @@ internal static class PresetCompletionDialogConfirm
     {
         if (NativePresetUi.OwnsCompletionNotice(__instance)) __result = true;
     }
-}
-
-[HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.SetCustomParts))]
-internal static class DiagnosticSetCustomParts
-{
-    static void Postfix(BazaarManager __instance, uint itemId, BazaarCustomItemData.PartsCategory category, int index) =>
-        LayoutDiagnostics.SetCustomParts(__instance, itemId, category, index);
-}
-
-[HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.LoadBazaarCustomPartsModel))]
-internal static class DiagnosticModelLoad
-{
-    static void Postfix(BazaarManager __instance) => LayoutDiagnostics.ModelLoad(__instance);
-}
-
-[HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.SetupPartsBuff))]
-internal static class DiagnosticBuffSetup
-{
-    static void Postfix(BazaarManager __instance) => LayoutDiagnostics.SetupBuff(__instance);
-}
-
-[HarmonyPatch(typeof(BazaarManager), nameof(BazaarManager.GetEditCustomPartsEffectList),
-    new[] { typeof(CustomPartsCompositeLevel), typeof(CustomPartsBuffParam) })]
-internal static class DiagnosticEffectRead
-{
-    static void Postfix(BazaarManager __instance) => LayoutDiagnostics.ReadEffects(__instance);
-}
-
-[HarmonyPatch(typeof(BazaarMyShop), nameof(BazaarMyShop.RefreshBazaarPartsModel),
-    new[] { typeof(uint), typeof(BazaarCustomItemData.PartsCategory), typeof(int), typeof(bool), typeof(bool) })]
-internal static class DiagnosticShopModelRefresh
-{
-    static void Postfix(uint itemId, BazaarCustomItemData.PartsCategory category, int index, bool isCreate, bool isEdit) =>
-        LayoutDiagnostics.ShopModel("RefreshBazaarPartsModel", itemId, category, index, isCreate, isEdit);
-}
-
-[HarmonyPatch(typeof(BazaarMyShop), nameof(BazaarMyShop.SetBazaarPartsModel),
-    new[] { typeof(uint), typeof(BazaarCustomItemData.PartsCategory), typeof(int), typeof(bool), typeof(bool) })]
-internal static class DiagnosticShopModelSet
-{
-    static void Postfix(uint itemId, BazaarCustomItemData.PartsCategory category, int index, bool isCreate, bool isEdit) =>
-        LayoutDiagnostics.ShopModel("SetBazaarPartsModel", itemId, category, index, isCreate, isEdit);
-}
-
-[HarmonyPatch(typeof(BazaarMyShop), nameof(BazaarMyShop.LoadBazaarPartsModel),
-    new[] { typeof(uint), typeof(BazaarCustomItemData.PartsCategory), typeof(int), typeof(Il2CppSystem.Action<GameObject>), typeof(Il2CppSystem.Action) })]
-internal static class DiagnosticShopModelLoad
-{
-    static void Postfix(uint itemId, BazaarCustomItemData.PartsCategory category, int index) =>
-        LayoutDiagnostics.ShopModel("LoadBazaarPartsModel", itemId, category, index, false, false);
 }

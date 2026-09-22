@@ -1,0 +1,16 @@
+{
+  "presets.guide": "プリセット",
+  "presets.menu.save": "プリセットを保存",
+  "presets.menu.load": "プリセットを読み込み",
+  "presets.slots.empty": "空きスロット",
+  "presets.name.prompt": "プリセット名を入力してください",
+  "presets.name.confirm": "プリセット名「{0}」で保存しますか？",
+  "presets.save.completed": "保存が完了しました。",
+  "presets.load.completed": "読み込みが完了しました。",
+  "presets.delete.completed": "削除が完了しました。",
+  "presets.delete.guide": "削除",
+  "presets.delete.confirm": "プリセット「{0}」を削除しますか？",
+  "presets.load.failed": "読み込みできませんでした。読み込み前の配置へ戻しました。ログをご確認ください。",
+  "presets.storage.blocked": "プリセットデータを読み取れないため保存できません。ログをご確認ください。",
+  "save.failed": "保存できませんでした。ログをご確認ください。"
+}

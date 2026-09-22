@@ -1,0 +1,16 @@
+{
+  "presets.guide": "Presets",
+  "presets.menu.save": "Save preset",
+  "presets.menu.load": "Load preset",
+  "presets.slots.empty": "Empty slot",
+  "presets.name.prompt": "Enter a preset name",
+  "presets.name.confirm": "Save this preset as \"{0}\"?",
+  "presets.save.completed": "Preset saved.",
+  "presets.load.completed": "Preset loaded.",
+  "presets.delete.completed": "Preset deleted.",
+  "presets.delete.guide": "Delete",
+  "presets.delete.confirm": "Delete preset \"{0}\"?",
+  "presets.load.failed": "Could not load the preset. The layout from before loading was restored. Check the log.",
+  "presets.storage.blocked": "Preset data could not be read, so saving is unavailable. Check the log.",
+  "save.failed": "Could not save. Check the log."
+}

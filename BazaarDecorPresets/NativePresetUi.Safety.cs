@@ -16,6 +16,7 @@ internal static partial class NativePresetUi
         SessionFaulted = true;
         faultFooterRestored = faultCleanupFailed = false;
         generation++;
+        uiCallbacks.Invalidate();
         CleanupStep("log", () => Plugin.Logger.LogError("BDP SessionDisabled " + error));
         CleanupStep("keyboard", CloseOwnKeyboard);
         CleanupStep("title", RestorePresetTitle);

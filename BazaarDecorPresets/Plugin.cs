@@ -148,12 +148,78 @@ internal static class PresetStartInput
 [HarmonyPatch(typeof(ControllableUI), nameof(ControllableUI.OnNorth))]
 internal static class PresetDeleteInput
 {
-    static bool Prefix()
+    static bool Prefix(ControllableUI __instance)
     {
         if (NativePresetUi.SessionFaulted) return true;
-        bool owned = NativePresetUi.IsSlotMenuOpen;
-        try { return !NativePresetUi.TryOpenDeleteForFocusedSlot(); }
+        bool owned = false;
+        try
+        {
+            // Already-dispatched Y can outlive the input-enable check.
+            owned = NativePresetUi.ShouldBlockEditorInput(__instance);
+            if (owned) return false;
+            owned = NativePresetUi.OwnsSlotInput(__instance);
+            return !owned || !NativePresetUi.TryOpenDeleteForFocusedSlot();
+        }
         catch (Exception ex) { NativePresetUi.ReportFault(ex); return !owned; }
+    }
+}
+
+// Use stock eligibility for navigation and buttons, scoped to the editor tree.
+// Icon contents override the base eligibility method independently of the page.
+[HarmonyPatch]
+internal static class PresetEditorInputEligibility
+{
+    static System.Collections.Generic.IEnumerable<System.Reflection.MethodBase> TargetMethods()
+    {
+        yield return AccessTools.DeclaredMethod(typeof(UIBazaarCustomPage), nameof(UIBazaarCustomPage.IsInputEnable));
+        yield return AccessTools.DeclaredMethod(typeof(UIIconContent), nameof(UIIconContent.IsInputEnable));
+    }
+
+    static void Postfix(ControllableUI __instance, ref bool __result)
+    {
+        if (!__result) return;
+        try { if (NativePresetUi.ShouldBlockEditorInput(__instance)) __result = false; }
+        catch (Exception ex) { NativePresetUi.ReportFault(ex); }
+    }
+}
+
+[HarmonyPatch(typeof(ControllableUI), nameof(ControllableUI.OnSouth))]
+internal static class PresetBackgroundCancelGuard
+{
+    static bool Prefix(ControllableUI __instance)
+    {
+        bool blocked = false;
+        try
+        {
+            blocked = NativePresetUi.ShouldBlockEditorInput(__instance);
+            return !blocked;
+        }
+        catch (Exception ex)
+        {
+            NativePresetUi.ReportFault(ex);
+            return !blocked;
+        }
+    }
+}
+
+[HarmonyPatch(typeof(ControllableUI), nameof(ControllableUI.OnSouth))]
+internal static class PresetNameChoiceCancel
+{
+    static bool Prefix(ControllableUI __instance)
+    {
+        bool owned = false;
+        try
+        {
+            var keyboard = NativePresetUi.GetOwnNameChoiceKeyboard(__instance);
+            if (keyboard == null) return true;
+            owned = true;
+            return NativePresetUi.PrepareNameChoiceCancel(keyboard);
+        }
+        catch (Exception ex)
+        {
+            NativePresetUi.ReportFault(ex);
+            return !owned;
+        }
     }
 }
 

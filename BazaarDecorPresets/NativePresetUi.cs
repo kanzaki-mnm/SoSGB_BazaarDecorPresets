@@ -27,6 +27,9 @@ internal static partial class NativePresetUi
     private static Mode mode;
     private static Il2CppSystem.Action<int> choiceCallback, slotCallback, noticeCallback, deleteCallback;
     private static KeyboardManager.InputCompleteCallback nameCallback;
+    private static KeyboardManager pendingNameChoiceCancel;
+    private static readonly UiCallbackGate uiCallbacks = new();
+    private static long nameRequestTicket;
     private static Il2CppSystem.Action nameCancelled;
     private enum Mode { None, Save, Inspect }
 
@@ -43,6 +46,7 @@ internal static partial class NativePresetUi
     internal static void Begin(BazaarManager value)
     {
         generation++;
+        uiCallbacks.Invalidate();
         SessionFaulted = false;
         loadRecoveryBlocked = false;
         faultFooterRestored = false;
@@ -74,6 +78,7 @@ internal static partial class NativePresetUi
     internal static void End()
     {
         generation++;
+        uiCallbacks.Invalidate();
         Guard(CloseOwnKeyboard);
         Guard(ClearState);
         ResetMenuState();
@@ -121,6 +126,22 @@ internal static partial class NativePresetUi
         if (CanEnterPresetMenu) Open();
     }
 
+    internal static bool ShouldBlockEditorInput(ControllableUI source)
+    {
+        // Stock keyboard transitions briefly expose the editor between dialogs.
+        // The preset flow still owns input during that gap, even if IsDialog is
+        // false. Do not gate this on Ready or the keyboard's visible state.
+        if (!sessionActive || !open || page == null || source == null ||
+            page.myKey != UILoadKey.BazaarCustom) return false;
+        var target = source.transform;
+        var editorRoot = page.transform;
+        if (target == null || editorRoot == null ||
+            (target != editorRoot && !target.IsChildOf(editorRoot))) return false;
+        // Preserve input on the foreground dialogs, including any that
+        // a future game version parents under the editor itself.
+        return source.GetComponentInParent<UIDialog>() == null;
+    }
+
     internal static bool AppearanceBlocksPresets => TransmogBridge.BlocksPresets(IsAppearanceEditorVisible);
     private static bool CanEnterPresetMenu => !SessionFaulted && !loadRecoveryBlocked && Ready && !open && !AppearanceBlocksPresets && page.IsInputEnable();
     internal static bool ShouldShowFooterGuide => !SessionFaulted && !loadRecoveryBlocked && Ready && !open && !AppearanceBlocksPresets;
@@ -131,6 +152,7 @@ internal static partial class NativePresetUi
         // Unity destruction must release our UI before the idle fast path.
         if (editor == null || (page != null && !editor.IsCustomMode)) { End(); return; }
         if (SessionFaulted) { TickFaultCleanup(); return; }
+        CompleteNameChoiceCancel();
         if (returnToSaveSlots)
         {
             // KeyboardManager invokes its cancel callback before its input UI
@@ -153,7 +175,7 @@ internal static partial class NativePresetUi
         // The stock dialog can be cancelled without calling our ChoicesData
         // callback.  Recover only after two empty frames, so normal close/open
         // transitions keep their own callback chain intact.
-        if (open && !nameInputOpen && ui != null && !ui.IsDialog) noDialogFrames++;
+        if (open && !nameInputOpen && !dialogCloseTracker.IsClosing && ui != null && !ui.IsDialog) noDialogFrames++;
         else noDialogFrames = 0;
         if (open && noDialogFrames >= 2)
         {
@@ -233,8 +255,9 @@ internal static partial class NativePresetUi
         slotFooterRequested = false;
         mode = Mode.None;
         int ticket = generation;
+        long request = uiCallbacks.Begin();
         choiceCallback = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<int>>((Action<int>)(choice =>
-        { if (ticket == generation) Guard(() => OnMainChoice(choice)); }));
+        { if (ticket == generation && uiCallbacks.TryConsume(request)) Guard(() => OnMainChoice(choice)); }));
         OpenChoices(ui, new[] { UiTextIds.MenuSave, UiTextIds.MenuInspect, UiTextIds.StockCancel }, choiceCallback);
     }
 
@@ -256,8 +279,9 @@ internal static partial class NativePresetUi
         slotDialog = null;
         BeginObjectPreview();
         int ticket = generation;
+        long request = uiCallbacks.Begin();
         slotCallback = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<int>>((Action<int>)(choice =>
-        { if (ticket == generation) Guard(() => OnSlotChoice(choice)); }));
+        { if (ticket == generation && uiCallbacks.TryConsume(request)) Guard(() => OnSlotChoice(choice)); }));
         OpenChoices(ui, Enumerable.Range(0, SlotCount).Select(i => UiTextIds.Slot + (uint)i).Append(UiTextIds.StockCancel), slotCallback);
     }
 
@@ -280,27 +304,29 @@ internal static partial class NativePresetUi
         var keyboard = UnityEngine.Object.FindObjectOfType<KeyboardManager>();
         if (!Ready || keyboard == null) { Abort(); return; }
         int ticket = generation;
+        int targetSlot = selectedSlot;
+        long request = nameRequestTicket = uiCallbacks.Begin();
         nameCallback = DelegateSupport.ConvertDelegate<KeyboardManager.InputCompleteCallback>((Action<KeyboardManager.Result, string>)((result, text) =>
-        { if (ticket == generation) Guard(() => SaveName(result, text)); }));
+        { if (ticket == generation && uiCallbacks.TryConsume(request)) Guard(() => SaveName(result, text, targetSlot)); }));
         nameCancelled = DelegateSupport.ConvertDelegate<Il2CppSystem.Action>((Action)(() =>
-        { if (ticket == generation) Guard(ReturnToSaveSlots); }));
+        { if (ticket == generation && uiCallbacks.TryConsume(request)) Guard(ReturnToSaveSlots); }));
         nameInputOpen = true;
         nameFooterRequested = false;
         keyboard.ShowRequest(KeyboardManager.KeyboardType.BuyPetAnimal, "", nameCallback, nameCancelled, false, true);
     }
 
-    private static void SaveName(KeyboardManager.Result result, string text)
+    private static void SaveName(KeyboardManager.Result result, string text, int targetSlot)
     {
-        nameInputOpen = false;
-        nameFooterRequested = false;
-        if (result != KeyboardManager.Result.Success) { ReturnToSaveSlots(); return; }
+        pendingNameChoiceCancel = null;
+        if (!NameInputCompletion.Complete(result == KeyboardManager.Result.Success,
+            ref nameInputOpen, ref nameFooterRequested, ref returnToSaveSlots)) return;
         string name = text?.Trim() ?? "";
         // The stock keyboard constrains this request to eight characters. An
         // empty successful result has no valid preset representation, so leave
         // the save flow without inventing a second validation UI.
         if (name.Length == 0) { returnToSaveSlots = true; return; }
         var candidate = file.Copy();
-        PresetStorage.Put(candidate, selectedSlot, new Preset { Name = name, Slots = Snapshot() });
+        PresetStorage.Put(candidate, targetSlot, new Preset { Name = name, Slots = Snapshot() });
         try
         {
             PresetStorage.Save(path, candidate);
@@ -363,8 +389,10 @@ internal static partial class NativePresetUi
         if (ui == null) { Abort(); return; }
         deleteTargetName = preset.Name;
         int ticket = generation;
+        int targetSlot = selectedSlot;
+        long request = uiCallbacks.Begin();
         deleteCallback = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<int>>((Action<int>)(choice =>
-        { if (ticket == generation) Guard(() => OnDeleteChoice(choice)); }));
+        { if (ticket == generation && uiCallbacks.TryConsume(request)) Guard(() => OnDeleteChoice(choice, targetSlot)); }));
         var ids = new Il2CppSystem.Collections.Generic.List<uint>();
         ids.Add(UiTextIds.StockYes);
         ids.Add(UiTextIds.StockCancel);
@@ -373,11 +401,11 @@ internal static partial class NativePresetUi
         ui.OpenDialog(UILoadKey.DefaultDialog, data, DialogMaskType.Translucent, UIDialogManager.AnchorType.Center, false, true, null, null);
     }
 
-    private static void OnDeleteChoice(int choice)
+    private static void OnDeleteChoice(int choice, int targetSlot)
     {
         if (choice != 0) { CloseDialog(OpenSlots); return; }
         var candidate = file.Copy();
-        PresetStorage.Remove(candidate, selectedSlot);
+        PresetStorage.Remove(candidate, targetSlot);
         try
         {
             PresetStorage.Save(path, candidate);
@@ -420,9 +448,10 @@ internal static partial class NativePresetUi
         if (ui == null) { after?.Invoke(); return; }
         NoticeText.Current = message;
         int ticket = generation;
+        long request = uiCallbacks.Begin();
         noticeCallback = DelegateSupport.ConvertDelegate<Il2CppSystem.Action<int>>((Action<int>)(_ =>
         {
-            if (ticket != generation) return;
+            if (ticket != generation || !uiCallbacks.TryConsume(request)) return;
             Guard(() =>
             {
                 completionNoticeOpen = false;
@@ -446,15 +475,19 @@ internal static partial class NativePresetUi
     private static void CloseDialog(Action after)
     {
         var ui = GetUiManager();
-        if (ui == null) { after?.Invoke(); return; }
+        if (ui == null) { uiCallbacks.Invalidate(); after?.Invoke(); return; }
         int ticket = generation;
         if (!dialogCloseTracker.TryPrepare(true, closeTicket =>
-            DelegateSupport.ConvertDelegate<Il2CppSystem.Action>((Action)(() =>
         {
-            // Release the close even if a fault invalidated the navigation callback.
-            if (!dialogCloseTracker.Complete(closeTicket)) return;
-            if (ticket == generation) Guard(() => after?.Invoke());
-        })), out var callback)) return;
+            // Retire choice callbacks even when Y, rather than a choice, closed the list.
+            long request = uiCallbacks.Begin();
+            return DelegateSupport.ConvertDelegate<Il2CppSystem.Action>((Action)(() =>
+            {
+                // Stock closing must finish even when navigation has been retired.
+                if (!dialogCloseTracker.Complete(closeTicket)) return;
+                if (ticket == generation && uiCallbacks.TryConsume(request)) Guard(() => after?.Invoke());
+            }));
+        }, out var callback)) return;
         // After submission, a thrown API call may already have started closing.
         // Only the completion callback or session reset may release that wait.
         ui.CloseDialog(null, callback, true, true, false);
@@ -469,6 +502,7 @@ internal static partial class NativePresetUi
 
     private static void ClearState()
     {
+        uiCallbacks.Invalidate();
         RestorePresetTitle();
         ResetMenuState();
         RemoveObjectPreview();
@@ -476,6 +510,7 @@ internal static partial class NativePresetUi
 
     private static void ResetMenuState()
     {
+        uiCallbacks.Invalidate();
         open = slotMenuOpen = nameInputOpen = completionNoticeOpen = returnToSaveSlots = nameFooterRequested = slotFooterRequested = completionFooterRequested = false;
         noDialogFrames = 0;
         selectedSlot = -1;
@@ -483,16 +518,15 @@ internal static partial class NativePresetUi
         mode = Mode.None;
         choiceCallback = slotCallback = noticeCallback = deleteCallback = null;
         nameCallback = null;
+        pendingNameChoiceCancel = null;
         nameCancelled = null;
         slotDialog = null;
     }
 
     private static void ReturnToSaveSlots()
     {
-        if (!nameInputOpen) return;
-        nameInputOpen = false;
-        nameFooterRequested = false;
-        returnToSaveSlots = true;
+        pendingNameChoiceCancel = null;
+        NameInputCompletion.Complete(false, ref nameInputOpen, ref nameFooterRequested, ref returnToSaveSlots);
     }
 
     private static UIManager GetUiManager()
@@ -545,7 +579,7 @@ internal static partial class NativePresetUi
             footerRestoreFrame = Time.frameCount + 1;
         }
     }
-    private static void Abort() { CloseOwnKeyboard(); ClearState(); }
+    private static void Abort() { uiCallbacks.Invalidate(); CloseOwnKeyboard(); ClearState(); }
 
     internal static bool TryGetText(LanguageManager language, LocalizeTextTableType table, uint id, out string text)
     {
@@ -561,7 +595,8 @@ internal static partial class NativePresetUi
             if (id >= UiTextIds.Slot && id < UiTextIds.Slot + SlotCount)
             {
                 var preset = PresetStorage.At(file, (int)(id - UiTextIds.Slot) + 1);
-                text = preset == null ? Localization.Get("presets.slots.empty") : Localization.Slot((int)(id - UiTextIds.Slot) + 1, preset.Name);
+                text = Localization.Slot((int)(id - UiTextIds.Slot) + 1,
+                    preset == null ? Localization.Get("presets.slots.empty") : preset.Name);
                 return true;
             }
         }
@@ -583,10 +618,63 @@ internal static partial class NativePresetUi
         return callback != null && IL2CPP.Il2CppObjectBaseToPtr(callback) == IL2CPP.Il2CppObjectBaseToPtr(nameCallback);
     }
 
+    internal static KeyboardManager GetOwnNameChoiceKeyboard(ControllableUI source)
+    {
+        if (!nameInputOpen || source == null || source.TryCast<UIDialogChoiceBar>() == null) return null;
+        var input = source.GetComponentInParent<UIInputDialog>();
+        if (input == null || !input.gameObject.activeInHierarchy) return null;
+        var keyboard = UnityEngine.Object.FindObjectOfType<KeyboardManager>();
+        return IsOwnNameInput(keyboard) ? keyboard : null;
+    }
+
+    internal static bool PrepareNameChoiceCancel(KeyboardManager keyboard)
+    {
+        // Unlike the text-field B handler, the stock decision-row B handler
+        // can close Input without supplying a result to KeyboardManager.
+        // Keep its close/SE behavior, but supply the same result as the field.
+        // Once submission has started, another B must not close the UI again.
+        if (keyboard.stateContext == null || keyboard.stateContext.CurrentState != KeyboardManager.State.Inputting ||
+            keyboard.result != KeyboardManager.Result.None)
+        {
+            return false;
+        }
+        pendingNameChoiceCancel = keyboard;
+        keyboard.SetResultCancel();
+        return true;
+    }
+
+    private static void CompleteNameChoiceCancel()
+    {
+        // The decision-row close can finish the stock keyboard without its
+        // cancel callback. Only bridge a cancel we explicitly requested, and
+        // wait for actual completion rather than guessing an animation delay.
+        if (!nameInputOpen || pendingNameChoiceCancel == null) return;
+        var context = pendingNameChoiceCancel.stateContext;
+        if (context == null || context.CurrentState != KeyboardManager.State.Idle) return;
+        var ui = GetUiManager();
+        if (ui == null || ui.IsDialog) return;
+        if (uiCallbacks.TryConsume(nameRequestTicket)) ReturnToSaveSlots();
+    }
+
     internal static bool IsNameInputOpen => nameInputOpen;
     internal static bool IsCompletionNoticeOpen => completionNoticeOpen;
     internal static bool OwnsCompletionNotice(UIDefaultDialog dialog) => completionNoticeOpen && dialog != null && dialog.infoId == UiTextIds.Notice;
     internal static bool IsSlotMenuOpen => slotMenuOpen;
+
+    internal static bool OwnsSlotInput(ControllableUI source)
+    {
+        if (!slotMenuOpen || source == null || !source.gameObject.activeInHierarchy) return false;
+        CaptureSlotDialog();
+        if (slotDialog == null || !slotDialog.gameObject.activeInHierarchy) return false;
+        // A visible list may be behind another modal. Both the source's nearest
+        // dialog and the official foreground page must be this exact instance.
+        var owner = source.GetComponentInParent<UIDialog>();
+        if (owner == null || IL2CPP.Il2CppObjectBaseToPtr(owner) != IL2CPP.Il2CppObjectBaseToPtr(slotDialog)) return false;
+        var ui = GetUiManager();
+        return ui != null && ui.IsDialog && ui.CurrentUIKey == UILoadKey.SelectDialog &&
+            ui.DialogManager != null && ui.DialogManager.TryGetPage(ui.CurrentUIKey, out var current) &&
+            current != null && IL2CPP.Il2CppObjectBaseToPtr(current) == IL2CPP.Il2CppObjectBaseToPtr(slotDialog);
+    }
 
     internal static bool TryOpenDeleteForFocusedSlot()
     {

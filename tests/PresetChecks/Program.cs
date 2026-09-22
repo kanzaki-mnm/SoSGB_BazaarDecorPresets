@@ -98,7 +98,91 @@ Check(ReferenceEquals(reported, cleanupError) && remainingCleanupRan,
     "cleanup failure reports original error and permits subsequent cleanup");
 CleanupActions.Run(() => throw cleanupError, _ => throw new IOException("injected logger failure"));
 Check(true, "cleanup logging failure does not escape into the game");
+bool inputOpen = true, inputFooter = true, returnToSlots = false;
+bool continueSave = NameInputCompletion.Complete(false, ref inputOpen, ref inputFooter, ref returnToSlots);
+Check(!continueSave && !inputOpen && !inputFooter && returnToSlots,
+    "unsuccessful name completion skips save and queues return before clearing input ownership");
+NameInputCompletion.Complete(false, ref inputOpen, ref inputFooter, ref returnToSlots);
+Check(returnToSlots, "duplicate cancellation preserves pending slot return");
+returnToSlots = false;
+NameInputCompletion.Complete(false, ref inputOpen, ref inputFooter, ref returnToSlots);
+Check(!returnToSlots, "cancellation after input cleanup does not reopen slots");
+inputOpen = inputFooter = true;
+continueSave = NameInputCompletion.Complete(true, ref inputOpen, ref inputFooter, ref returnToSlots);
+Check(continueSave && !inputOpen && !inputFooter && !returnToSlots,
+    "successful name completion continues save without scheduling cancellation");
+NameInputCompletion.Complete(false, ref inputOpen, ref inputFooter, ref returnToSlots);
+Check(!returnToSlots, "cancel notification after successful completion cannot queue a return");
 var closeTracker = new DialogCloseTracker();
+var callbacks = new UiCallbackGate();
+long menuRequest = callbacks.Begin();
+int menuActions = 0;
+Action chooseMenu = () => { if (callbacks.TryConsume(menuRequest)) menuActions++; };
+chooseMenu();
+chooseMenu();
+Check(menuActions == 1, "duplicate choices execute their side effects only once");
+long oldList = callbacks.Begin();
+long deleteRequest = callbacks.Begin();
+Check(!callbacks.TryConsume(oldList) && callbacks.TryConsume(deleteRequest),
+    "Y navigation retires list choices without consuming the new confirmation");
+long oldName = callbacks.Begin();
+callbacks.Invalidate();
+long newName = callbacks.Begin();
+Check(!callbacks.TryConsume(oldName) && callbacks.TryConsume(newName),
+    "reopening within one editor session rejects the previous name result");
+foreach (string first in new[] { "success", "cancel", "fallback" })
+{
+    long nameRequest = callbacks.Begin();
+    var actions = new List<string>();
+    void NameResult(string kind)
+    {
+        if (callbacks.TryConsume(nameRequest)) actions.Add(kind);
+    }
+    NameResult(first);
+    NameResult("success");
+    NameResult("cancel");
+    NameResult("fallback");
+    Check(actions.SequenceEqual(new[] { first }),
+        "name completion/cancel/fallback accept only the first terminal notification: " + first);
+}
+long retiringRequest = callbacks.Begin();
+callbacks.Invalidate();
+Check(!callbacks.TryConsume(retiringRequest), "menu cleanup rejects callbacks even before another menu opens");
+long reentrantRequest = callbacks.Begin();
+int callbackWrites = 0;
+void ReentrantResult()
+{
+    if (!callbacks.TryConsume(reentrantRequest)) return;
+    callbackWrites++;
+    ReentrantResult();
+}
+ReentrantResult();
+Check(callbackWrites == 1, "request is consumed before synchronous reentrant side effects");
+closeTracker.TryBegin(true, out int retiredClose);
+long retiredNavigation = callbacks.Begin();
+callbacks.Invalidate();
+bool retiredNavigationRan = false;
+if (closeTracker.Complete(retiredClose) && callbacks.TryConsume(retiredNavigation)) retiredNavigationRan = true;
+Check(!closeTracker.IsClosing && !retiredNavigationRan,
+    "retired close releases stock wait without navigating or reopening UI");
+closeTracker.TryBegin(true, out int liveClose);
+long liveNavigation = callbacks.Begin();
+int navigations = 0;
+void CompleteNavigation()
+{
+    if (!closeTracker.Complete(liveClose)) return;
+    if (callbacks.TryConsume(liveNavigation)) navigations++;
+}
+CompleteNavigation();
+CompleteNavigation();
+Check(navigations == 1 && !closeTracker.IsClosing, "duplicate close completion navigates once");
+closeTracker.TryBegin(true, out int replacedClose);
+long replacedNavigation = callbacks.Begin();
+long replacementDialog = callbacks.Begin();
+bool replacedNavigationRan = false;
+if (closeTracker.Complete(replacedClose) && callbacks.TryConsume(replacedNavigation)) replacedNavigationRan = true;
+Check(!replacedNavigationRan && !closeTracker.IsClosing && callbacks.TryConsume(replacementDialog),
+    "late close cannot consume the replacement dialog callback");
 for (int frame = 0; frame < 120; frame++)
     if (closeTracker.TryBegin(false, out _)) throw new Exception("Closed an absent or foreign dialog");
 Check(closeTracker.TryBegin(true, out int lateClose), "late owned dialog remains eligible after waiting; foreign UI is ignored");

@@ -13,6 +13,8 @@ internal static partial class NativePresetUi
 {
     private const int SlotCount = 6;
     private static BazaarManager editor;
+    private static UIManager uiManager;
+    private static bool sessionActive;
     private static UIBazaarCustomPage page;
     private static UIMenuFooter footer;
     private static UISelectDialog slotDialog;
@@ -41,6 +43,8 @@ internal static partial class NativePresetUi
     {
         generation++;
         editor = value;
+        sessionActive = true;
+        uiManager = null;
         page = null;
         footer = null;
         slotDialog = null;
@@ -68,6 +72,8 @@ internal static partial class NativePresetUi
         CloseOwnKeyboard();
         ClearState();
         editor = null;
+        sessionActive = false;
+        uiManager = null;
         page = null;
         footer = null;
         slotDialog = null;
@@ -96,7 +102,7 @@ internal static partial class NativePresetUi
     internal static bool CanOpenFromStart(ControllableUI source)
     {
         if (!CanEnterPresetMenu || source == null || page?.transform == null || !source.transform.IsChildOf(page.transform)) return false;
-        var ui = UnityEngine.Object.FindObjectOfType<UIManager>();
+        var ui = GetUiManager();
         return ui != null && !ui.IsDialog;
     }
 
@@ -114,7 +120,9 @@ internal static partial class NativePresetUi
 
     internal static void Tick()
     {
-        if (editor != null && page != null && !editor.IsCustomMode) { End(); return; }
+        if (!sessionActive) return;
+        // Unity destruction must release our UI before the idle fast path.
+        if (editor == null || (page != null && !editor.IsCustomMode)) { End(); return; }
         if (returnToSaveSlots)
         {
             // KeyboardManager invokes its cancel callback before its input UI
@@ -125,10 +133,10 @@ internal static partial class NativePresetUi
             OpenSlots();
             return;
         }
-        var ui = UnityEngine.Object.FindObjectOfType<UIManager>();
-        if (nameInputOpen && !nameFooterRequested) RefreshNameInputFooter();
-        if (slotMenuOpen && !slotFooterRequested) RefreshSlotListFooter();
-        if (completionNoticeOpen && !completionFooterRequested) RefreshCompletionFooter();
+        var ui = GetUiManager();
+        if (nameInputOpen && !nameFooterRequested) RefreshDialogFooter(GuideKey.East, ref nameFooterRequested);
+        if (slotMenuOpen && !slotFooterRequested) RefreshDialogFooter(GuideKey.East, ref slotFooterRequested);
+        if (completionNoticeOpen && !completionFooterRequested) RefreshDialogFooter(GuideKey.South, ref completionFooterRequested);
         CaptureSlotDialog();
         UpdateObjectPreview();
         RefreshPresetTitle();
@@ -209,7 +217,7 @@ internal static partial class NativePresetUi
 
     private static void OpenMainMenu()
     {
-        var ui = UnityEngine.Object.FindObjectOfType<UIManager>();
+        var ui = GetUiManager();
         if (!Ready || AppearanceBlocksPresets || (!open && !page.IsInputEnable()) || ui == null || ui.IsDialog) return;
         if (!open) CaptureEditorFooterGuide();
         open = true;
@@ -233,7 +241,7 @@ internal static partial class NativePresetUi
 
     private static void OpenSlots()
     {
-        var ui = UnityEngine.Object.FindObjectOfType<UIManager>();
+        var ui = GetUiManager();
         if (!Ready || ui == null) { Abort(); return; }
         slotMenuOpen = true;
         slotFooterRequested = false;
@@ -323,7 +331,7 @@ internal static partial class NativePresetUi
         if (storageBlocked) { Notice("presets.storage.blocked", OpenSlots); return; }
         var preset = PresetStorage.At(file, selectedSlot);
         if (preset == null) { OpenSlots(); return; }
-        var ui = UnityEngine.Object.FindObjectOfType<UIManager>();
+        var ui = GetUiManager();
         if (ui == null) { Abort(); return; }
         deleteTargetName = preset.Name;
         int ticket = generation;
@@ -380,7 +388,7 @@ internal static partial class NativePresetUi
 
     private static void NoticeMessage(string message, Action after)
     {
-        var ui = UnityEngine.Object.FindObjectOfType<UIManager>();
+        var ui = GetUiManager();
         if (ui == null) { after?.Invoke(); return; }
         NoticeText.Current = message;
         int ticket = generation;
@@ -406,7 +414,7 @@ internal static partial class NativePresetUi
 
     private static void CloseDialog(Action after)
     {
-        var ui = UnityEngine.Object.FindObjectOfType<UIManager>();
+        var ui = GetUiManager();
         if (ui == null) { after?.Invoke(); return; }
         int ticket = generation;
         var callback = DelegateSupport.ConvertDelegate<Il2CppSystem.Action>((Action)(() => { if (ticket == generation) after?.Invoke(); }));
@@ -443,48 +451,36 @@ internal static partial class NativePresetUi
         returnToSaveSlots = true;
     }
 
-    private static void RefreshNameInputFooter()
+    private static UIManager GetUiManager()
+    {
+        // Unity's null check also detects a destroyed native object after a scene change.
+        if (uiManager == null || !uiManager.gameObject.activeInHierarchy)
+            uiManager = UnityEngine.Object.FindObjectOfType<UIManager>();
+        return uiManager;
+    }
+
+    private static void RefreshDialogFooter(GuideKey button, ref bool requested)
     {
         foreach (var candidate in Resources.FindObjectsOfTypeAll<UIMenuFooter>())
         {
             if (candidate == null || !candidate.gameObject.activeInHierarchy ||
                 candidate.guideTarget == null || candidate.LastGuideId < 0) continue;
             if (!candidate.guideTarget.GetComponentsInChildren<UIButtonGuide>(true)
-                .Any(guide => guide != null && guide.gameObject.activeInHierarchy && guide.button == GuideKey.East)) continue;
-            nameFooterRequested = true;
+                .Any(guide => guide != null && guide.gameObject.activeInHierarchy && guide.button == button)) continue;
+            // SetGuide synchronously invokes our footer patch, so mark first.
+            requested = true;
             candidate.SetGuide((KeyButtonGuideMasterId)(uint)candidate.LastGuideId);
             return;
         }
     }
 
-    private static void RefreshSlotListFooter()
+    private static int FocusedSlotIndex()
     {
-        foreach (var candidate in Resources.FindObjectsOfTypeAll<UIMenuFooter>())
-        {
-            if (candidate == null || !candidate.gameObject.activeInHierarchy ||
-                candidate.guideTarget == null || candidate.LastGuideId < 0) continue;
-            if (!candidate.guideTarget.GetComponentsInChildren<UIButtonGuide>(true)
-                .Any(guide => guide != null && guide.gameObject.activeInHierarchy && guide.button == GuideKey.East)) continue;
-            slotFooterRequested = true;
-            candidate.SetGuide((KeyButtonGuideMasterId)(uint)candidate.LastGuideId);
-            return;
-        }
+        // Do not retain the row array: the stock dialog owns its reconstruction.
+        var focused = slotDialog.GetComponentsInChildren<UIDialogChoiceBar>(true)
+            .FirstOrDefault(bar => bar != null && bar.gameObject.activeInHierarchy && bar.IsFocused);
+        return focused?.data?.id ?? -1;
     }
-
-    private static void RefreshCompletionFooter()
-    {
-        foreach (var candidate in Resources.FindObjectsOfTypeAll<UIMenuFooter>())
-        {
-            if (candidate == null || !candidate.gameObject.activeInHierarchy ||
-                candidate.guideTarget == null || candidate.LastGuideId < 0) continue;
-            if (!candidate.guideTarget.GetComponentsInChildren<UIButtonGuide>(true)
-                .Any(guide => guide != null && guide.gameObject.activeInHierarchy && guide.button == GuideKey.South)) continue;
-            completionFooterRequested = true;
-            candidate.SetGuide((KeyButtonGuideMasterId)(uint)candidate.LastGuideId);
-            return;
-        }
-    }
-
     private static void CaptureSlotDialog()
     {
         if (!slotMenuOpen || (slotDialog != null && slotDialog.gameObject.activeInHierarchy)) return;
@@ -554,15 +550,9 @@ internal static partial class NativePresetUi
         // Keep the editor modal isolated even if its preset storage became
         // unavailable after the list opened.
         if (storageBlocked) return true;
-        var dialog = Resources.FindObjectsOfTypeAll<UISelectDialog>().LastOrDefault(item =>
-            item != null && item.gameObject.activeInHierarchy &&
-            item.GetComponentsInChildren<UIDialogChoiceBar>(true).Any(bar =>
-                bar != null && bar.cacheData?.TextId >= UiTextIds.Slot &&
-                bar.cacheData.TextId < UiTextIds.Slot + SlotCount));
-        if (dialog == null) return false;
-        var focused = dialog.GetComponentsInChildren<UIDialogChoiceBar>(true)
-            .FirstOrDefault(bar => bar != null && bar.gameObject.activeInHierarchy && bar.IsFocused);
-        int index = focused?.data?.id ?? -1;
+        CaptureSlotDialog();
+        if (slotDialog == null || !slotDialog.gameObject.activeInHierarchy) return false;
+        int index = FocusedSlotIndex();
         // This is our list, so consume Y even on Cancel / an empty slot.
         if (index < 0 || index >= SlotCount || PresetStorage.At(file, index + 1) == null) return true;
         selectedSlot = index + 1;

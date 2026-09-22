@@ -58,9 +58,7 @@ internal static partial class NativePresetUi
             BuildObjectPreview(slotDialog);
             return;
         }
-        var focused = slotDialog.GetComponentsInChildren<UIDialogChoiceBar>(true)
-            .FirstOrDefault(bar => bar != null && bar.gameObject.activeInHierarchy && bar.IsFocused);
-        int selected = focused?.data?.id ?? -1;
+        int selected = FocusedSlotIndex();
         int key = mode == Mode.Save ? -1 : selected;
         if (key != previewSlot) RefreshObjectPreview(key);
     }

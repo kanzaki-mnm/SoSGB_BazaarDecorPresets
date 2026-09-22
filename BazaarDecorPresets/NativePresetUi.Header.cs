@@ -27,12 +27,13 @@ internal static partial class NativePresetUi
                 break;
             }
         }
-        if (presetTitle != null) presetTitle.text = replacement;
+        if (presetTitle != null && presetTitle.text != replacement) presetTitle.text = replacement;
     }
 
     private static void RestorePresetTitle()
     {
-        if (presetTitle != null && originalPresetTitle != null) presetTitle.text = originalPresetTitle;
+        if (presetTitle != null && originalPresetTitle != null && presetTitle.text != originalPresetTitle)
+            presetTitle.text = originalPresetTitle;
         presetTitle = null;
         originalPresetTitle = null;
     }

@@ -14,6 +14,16 @@ void Reject(Action action, string name)
     throw new Exception("FAIL: expected rejection: " + name);
 }
 
+var rowOrders = new[] { new[] { 30, 10, 20 }, new[] { 30, 10, 20 }, new[] { 30, 10, 20 } };
+var validatedOrder = PreviewOrderValidation.Validate(rowOrders);
+Check(validatedOrder.SequenceEqual(new[] { 30, 10, 20 }), "preview follows official order without an eleven-row assumption");
+rowOrders[0][0] = 99;
+Check(validatedOrder[0] == 30, "preview order snapshot is independent of its source");
+Reject(() => PreviewOrderValidation.Validate(rowOrders), "reject disagreeing row orders");
+Reject(() => PreviewOrderValidation.Validate(new[] { new[] { 1, 1 }, new[] { 1, 1 } }), "reject duplicate preview categories");
+Reject(() => PreviewOrderValidation.Validate(new[] { new[] { 1, 2 } }), "reject row/category count mismatch");
+Reject(() => PreviewOrderValidation.Validate(new int[][] { new[] { 1, 2 }, null }), "reject uninitialized preview row");
+Reject(() => PreviewOrderValidation.Validate(Array.Empty<int[]>()), "reject empty official preview list");
 var current = new List<Slot> { new Slot("OrnamentS", 0, 10), new Slot("OrnamentS", 1, 20), new Slot("Tent", 0, 30) };
 var choices = new Dictionary<(string, int), HashSet<uint>>
 {

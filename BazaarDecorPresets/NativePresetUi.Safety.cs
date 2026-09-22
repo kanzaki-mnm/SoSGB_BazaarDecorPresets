@@ -33,6 +33,7 @@ internal static partial class NativePresetUi
         });
         objectPreview = null;
         previewRows = null;
+        previewOrder = null;
         previewSlot = int.MinValue;
         previewLoadRequested = false;
         ResetMenuState();

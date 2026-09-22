@@ -6,6 +6,7 @@
     <Nullable>disable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../BazaarDecorPresets/PreviewOrderValidation.cs" Link="PreviewOrderValidation.cs" />
     <Compile Include="../../BazaarDecorPresets/UiCallbackGate.cs" Link="UiCallbackGate.cs" />
     <Compile Include="../../BazaarDecorPresets/NameInputCompletion.cs" Link="NameInputCompletion.cs" />
     <Compile Include="../../BazaarDecorPresets/TranslationCatalog.cs" Link="TranslationCatalog.cs" />

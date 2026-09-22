@@ -16,23 +16,10 @@ internal static partial class NativePresetUi
     private static RectTransform shiftedDialog;
     private static Vector2 originalDialogPosition;
     private static UICustomPartsListItem[] previewRows;
+    private static BazaarCustomPageCategory[] previewOrder;
     private static int previewSlot = int.MinValue;
     private static bool previewLoadRequested;
     private static Il2CppSystem.Action previewLoadedCallback;
-    private static readonly BazaarCustomPageCategory[] FallbackPreviewOrder =
-    {
-        BazaarCustomPageCategory.Tent,
-        BazaarCustomPageCategory.ShelfLeft,
-        BazaarCustomPageCategory.ShelfCenter,
-        BazaarCustomPageCategory.ShelfRight,
-        BazaarCustomPageCategory.OrnamentSLeftOutSide,
-        BazaarCustomPageCategory.OrnamentSLeftInSide,
-        BazaarCustomPageCategory.OrnamentSRightInSide,
-        BazaarCustomPageCategory.OrnamentSRightOutSide,
-        BazaarCustomPageCategory.OrnamentLLeft,
-        BazaarCustomPageCategory.OrnamentLRightInside,
-        BazaarCustomPageCategory.OrnamentLRightOutside
-    };
 
     private static void BeginObjectPreview()
     {
@@ -67,15 +54,23 @@ internal static partial class NativePresetUi
     {
         var prefabs = UnityEngine.Object.FindObjectOfType<UIPrefabsManager>();
         var pagePrefab = prefabs?.UIPagePrefabCache(UILoadKey.UIBazaarMaxPriceCustomLogPage);
-        var sourceRows = pagePrefab?.GetComponentsInChildren<UICustomPartsListItem>(true);
-        if (sourceRows == null || sourceRows.Length != FallbackPreviewOrder.Length)
+        if (pagePrefab == null)
         {
             EnsurePreviewTemplate();
             return;
         }
+        var officialRows = pagePrefab.GetComponent<UIBazaarMaxPriceCustomLogPage>()?.bazaarCustomPartsIconList;
+        if (officialRows == null || officialRows.Count == 0)
+            throw new InvalidOperationException("Official preview rows are unavailable.");
+        var sourceRows = officialRows.ToArray();
+        if (sourceRows.Any(row => row == null) || sourceRows.Select(row => row.GetInstanceID()).Distinct().Count() != sourceRows.Length)
+            throw new InvalidOperationException("Official preview rows are missing or duplicated.");
         var source = sourceRows[0].transform.parent;
         var dialogRect = dialog.GetComponent<RectTransform>();
         if (source == null || dialogRect?.parent == null) return;
+        // Paths are derived from the official references for this exact clone,
+        // not from names, a fixed hierarchy, or component enumeration order.
+        var paths = sourceRows.Select(row => PreviewRowPath(source, row.transform)).ToArray();
         objectPreview = UnityEngine.Object.Instantiate(source.gameObject, dialogRect.parent, false);
         objectPreview.name = "BDP_PresetObjectPreview";
         var rect = objectPreview.GetComponent<RectTransform>();
@@ -84,22 +79,79 @@ internal static partial class NativePresetUi
         rect.localScale = Vector3.one;
         rect.SetAsLastSibling();
         var group = objectPreview.GetComponent<CanvasGroup>() ?? objectPreview.AddComponent<CanvasGroup>();
+        float visibleAlpha = group.alpha;
+        group.alpha = 0f;
         group.blocksRaycasts = false;
         group.interactable = false;
+        previewRows = paths.Select(path => ResolvePreviewRow(objectPreview.transform, path)).ToArray();
+        if (objectPreview.GetComponentsInChildren<UICustomPartsListItem>(true).Length != previewRows.Length ||
+            previewRows.Select(row => row.GetInstanceID()).Distinct().Count() != previewRows.Length)
+            throw new InvalidOperationException("Cloned preview rows do not match the official list.");
+        InitializePreviewRows();
+        RefreshObjectPreview(mode == Mode.Save ? -1 : 0);
         shiftedDialog = dialogRect;
         originalDialogPosition = dialogRect.anchoredPosition;
         dialogRect.anchoredPosition = originalDialogPosition + new Vector2(SlotDialogOffsetX, 0f);
-        RefreshObjectPreview(mode == Mode.Save ? -1 : 0);
+        group.alpha = visibleAlpha;
+    }
+
+    private static int[] PreviewRowPath(Transform root, Transform row)
+    {
+        var path = new List<int>();
+        while (row != root)
+        {
+            if (row == null) throw new InvalidOperationException("Official row is outside the cloned panel.");
+            path.Add(row.GetSiblingIndex());
+            row = row.parent;
+        }
+        path.Reverse();
+        return path.ToArray();
+    }
+
+    private static UICustomPartsListItem ResolvePreviewRow(Transform root, int[] path)
+    {
+        foreach (int child in path) root = root.GetChild(child);
+        var rows = root.GetComponents<UICustomPartsListItem>();
+        if (rows.Length != 1) throw new InvalidOperationException("Ambiguous cloned preview row.");
+        return rows[0];
+    }
+
+    private static void InitializePreviewRows()
+    {
+        var master = BokuMono.API.Bazaar.MDM?.ItemMaster;
+        var parts = BokuMono.API.Bazaar.MDM?.CustomPartsMaster;
+        ItemMasterData seed = null;
+        if (master != null && parts?.list != null)
+            foreach (var part in parts.list)
+                if (part != null && master.TryGetData(part.Id, out var item) && item != null) { seed = item; break; }
+        if (seed == null) throw new InvalidOperationException("No item is available to initialize the preview.");
+
+        var orders = new List<BazaarCustomPageCategory[]>();
+        foreach (var row in previewRows)
+        {
+            // Runtime observation showed that SetDisp populates the row's order.
+            // Bootstrap at its first index while hidden, then validate before
+            // using any other index or displaying preset contents.
+            row.SetDisp(0, seed);
+            orders.Add(row.pageToCategoryList?.ToArray());
+        }
+        previewOrder = PreviewOrderValidation.Validate(orders);
+        var slots = new HashSet<(BazaarCustomItemData.PartsCategory, int)>();
+        for (int i = 0; i < previewOrder.Length; i++)
+        {
+            var category = BazaarCustomItemData.ToPartsCategory(previewOrder[i]);
+            int index = BazaarCustomItemData.ToPartsCategoryIndex(previewOrder[i]);
+            if (!Enum.IsDefined(typeof(BazaarCustomPageCategory), previewOrder[i]) || index < 0 || !slots.Add((category, index)))
+                throw new InvalidOperationException("Invalid or duplicated official preview slot.");
+            // Initialize category symbols even for empty preset slots.
+            previewRows[i].SetDisp(i, seed);
+        }
     }
 
     private static void RefreshObjectPreview(int index)
     {
         if (objectPreview == null) return;
         previewSlot = index;
-        previewRows ??= objectPreview.GetComponentsInChildren<UICustomPartsListItem>(true).ToArray();
-        var prefabs = UnityEngine.Object.FindObjectOfType<UIPrefabsManager>();
-        var recordPage = prefabs?.UIPagePrefabCache(UILoadKey.UIBazaarMaxPriceCustomLogPage)?.GetComponent<UIBazaarMaxPriceCustomLogPage>();
-        var order = recordPage?.pageToCategoryList;
         var master = BokuMono.API.Bazaar.MDM?.ItemMaster;
         var preset = index >= 0 && index < SlotCount ? PresetStorage.At(file, index + 1) : null;
         Dictionary<string, uint> current = null;
@@ -108,14 +160,9 @@ internal static partial class NativePresetUi
             current = new Dictionary<string, uint>();
             foreach (var slot in Snapshot()) current[slot.Category + ":" + slot.Index] = slot.ItemId;
         }
-        ItemMasterData seed = null;
-        var parts = BokuMono.API.Bazaar.MDM?.CustomPartsMaster;
-        if (master != null && parts?.list != null)
-            foreach (var part in parts.list)
-                if (part != null && master.TryGetData(part.Id, out var item) && item != null) { seed = item; break; }
         for (int i = 0; i < previewRows.Length; i++)
         {
-            var categoryPage = order != null && order.Count == previewRows.Length ? order[i] : FallbackPreviewOrder[i];
+            var categoryPage = previewOrder[i];
             var category = BazaarCustomItemData.ToPartsCategory(categoryPage);
             int slotIndex = BazaarCustomItemData.ToPartsCategoryIndex(categoryPage);
             uint itemId = 0;
@@ -129,7 +176,6 @@ internal static partial class NativePresetUi
             }
             else
             {
-                if (seed != null) row.SetDisp(i, seed);
                 row.partsName.text = "—";
                 row.partsIcon.enabled = false;
             }
@@ -144,6 +190,7 @@ internal static partial class NativePresetUi
         if (objectPreview != null) UnityEngine.Object.Destroy(objectPreview);
         objectPreview = null;
         previewRows = null;
+        previewOrder = null;
         previewSlot = int.MinValue;
         previewLoadRequested = false;
     }

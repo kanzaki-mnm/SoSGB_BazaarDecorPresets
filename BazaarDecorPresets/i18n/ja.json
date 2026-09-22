@@ -11,6 +11,10 @@
   "presets.delete.guide": "削除",
   "presets.delete.confirm": "プリセット「{0}」を削除しますか？",
   "presets.load.failed": "読み込みできませんでした。読み込み前の配置へ戻しました。ログをご確認ください。",
+  "presets.load.rejected": "読み込みできませんでした。配置は変更していません。",
+  "presets.load.recovery.failed": "配置を元に戻せませんでした。\n確定せず、オブジェの変更を取り消してください。",
+  "presets.load.visual.failed": "配置を読み込みましたが、表示を更新できませんでした。",
+  "presets.load.restored.visual.failed": "読み込み前の配置へ戻しましたが、表示を更新できませんでした。",
   "presets.storage.blocked": "プリセットデータを読み取れないため保存できません。ログをご確認ください。",
   "save.failed": "保存できませんでした。ログをご確認ください。"
 }

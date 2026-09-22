@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../../BazaarDecorPresets/Presets.cs" Link="Presets.cs" />
+    <Compile Include="../../BazaarDecorPresets/LayoutTransaction.cs" Link="LayoutTransaction.cs" />
     <Compile Include="../../BazaarDecorPresets/CleanupActions.cs" Link="CleanupActions.cs" />
     <Compile Include="../../BazaarDecorPresets/DialogCloseTracker.cs" Link="DialogCloseTracker.cs" />
   </ItemGroup>

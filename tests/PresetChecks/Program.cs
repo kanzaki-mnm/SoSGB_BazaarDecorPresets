@@ -139,4 +139,53 @@ bool factoryRan = false;
 Check(!closeTracker.TryPrepare<Action>(true, _ => { factoryRan = true; return () => { }; }, out _) && !factoryRan,
     "duplicate preparation does not run the delegate factory");
 closeTracker.Complete(activeClose);
+var transactionBefore = new List<Slot> { new("Tent", 0, 30), new("OrnamentS", 0, 10) };
+var transactionPlan = new List<Slot> { new("Tent", 0, 31), new("OrnamentS", 0, 11) };
+var editState = transactionBefore.ToList();
+void WriteSlot(Slot slot) => editState[editState.FindIndex(x => x.Category == slot.Category && x.Index == slot.Index)] = slot;
+var applied = LayoutTransaction.Apply(transactionBefore, transactionPlan, WriteSlot, () => editState.ToList());
+Check(applied.Status == LayoutApplyStatus.Applied && editState.SequenceEqual(transactionPlan) && applied.ModelsToRefresh.Count == 2,
+    "verified application requests changed models");
+int writes = 0;
+var unchanged = LayoutTransaction.Apply(editState.ToList(), transactionPlan, _ => writes++, () => editState.ToList());
+Check(unchanged.Status == LayoutApplyStatus.Applied && writes == 0 && unchanged.ModelsToRefresh.Count == 0,
+    "identical layout does not write or refresh models");
+editState = transactionBefore.ToList();
+var mutationError = new IOException("injected failure after mutation");
+var restored = LayoutTransaction.Apply(transactionBefore, transactionPlan, slot =>
+{
+    WriteSlot(slot);
+    if (slot.ItemId == 11) throw mutationError;
+}, () => editState.ToList());
+Check(restored.Status == LayoutApplyStatus.Restored && editState.SequenceEqual(transactionBefore) && ReferenceEquals(restored.Errors[0], mutationError),
+    "partial application restores the immediate pre-load layout and retains original failure");
+Check(restored.ModelsToRefresh.SequenceEqual(transactionBefore), "verified recovery refreshes all original models including failing setter");
+editState = transactionBefore.ToList();
+int recoveryAttempts = 0;
+var uncertain = LayoutTransaction.Apply(transactionBefore, transactionPlan, slot =>
+{
+    if (slot.ItemId == 30 || slot.ItemId == 10) recoveryAttempts++;
+    if (slot.ItemId == 30) throw new IOException("injected recovery failure");
+    WriteSlot(slot);
+    if (slot.ItemId == 11) throw mutationError;
+}, () => editState.ToList());
+Check(uncertain.Status == LayoutApplyStatus.RecoveryUnconfirmed && recoveryAttempts == 2 && editState[1].ItemId == 10,
+    "recovery continues after a failed slot and reports remaining mismatch");
+Check(uncertain.ModelsToRefresh.Count == 0, "unverified recovery never displays a claimed restored layout");
+editState = transactionBefore.ToList();
+var unreadable = LayoutTransaction.Apply(transactionBefore, transactionPlan, WriteSlot,
+    () => throw new IOException("injected snapshot failure"));
+Check(unreadable.Status == LayoutApplyStatus.RecoveryUnconfirmed && editState.SequenceEqual(transactionBefore),
+    "unreadable verification is never reported as restored even after successful setters");
+editState = transactionBefore.ToList();
+var ignoredWrite = LayoutTransaction.Apply(transactionBefore, transactionPlan, _ => { }, () => editState.ToList());
+Check(ignoredWrite.Status == LayoutApplyStatus.Restored, "silent rejected application is detected and original state verified");
+editState = transactionBefore.ToList();
+var recoveryThrowsAfterWrite = LayoutTransaction.Apply(transactionBefore, transactionPlan, slot =>
+{
+    WriteSlot(slot);
+    if (slot.ItemId == 11 || slot.ItemId == 30) throw mutationError;
+}, () => editState.ToList());
+Check(recoveryThrowsAfterWrite.Status == LayoutApplyStatus.Restored && recoveryThrowsAfterWrite.Errors.Count == 2,
+    "verified actual layout governs recovery even when a recovery setter throws after writing");
 Console.WriteLine($"{passed} checks passed.");

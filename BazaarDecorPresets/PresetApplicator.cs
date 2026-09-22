@@ -39,68 +39,43 @@ internal static class PresetApplicator
         return LayoutPlanner.Plan(current, preset.Slots, choices, available, new HashSet<uint>());
     }
 
-    internal static void Apply(BazaarManager editor, IReadOnlyList<Slot> before, IReadOnlyList<Slot> plan, Func<List<Slot>> snapshot)
+    internal static LayoutApplyResult Apply(BazaarManager editor, IReadOnlyList<Slot> before, IReadOnlyList<Slot> plan, Func<List<Slot>> snapshot)
     {
-        try
+        return LayoutTransaction.Apply(before, plan, slot =>
         {
-            var changed = new List<Slot>();
-            foreach (var slot in plan)
-            {
-                var old = before.First(item => item.Category == slot.Category && item.Index == slot.Index);
-                if (old.ItemId == slot.ItemId) continue;
-                if (!TryCategory(slot.Category, out var category)) throw new InvalidOperationException("Invalid plan category: " + slot.Category);
-                editor.SetCustomParts(slot.ItemId, category, slot.Index);
-                changed.Add(slot);
-            }
-
-            if (!SameLayout(plan, snapshot())) throw new InvalidOperationException("Editor did not accept the planned layout.");
-            RefreshChangedModels(changed);
-        }
-        catch
-        {
-            Restore(editor, before);
-            throw;
-        }
+            if (!TryCategory(slot.Category, out var category))
+                throw new InvalidOperationException("Invalid layout category: " + slot.Category);
+            editor.SetCustomParts(slot.ItemId, category, slot.Index);
+        }, snapshot);
     }
-
-    private static void Restore(BazaarManager editor, IReadOnlyList<Slot> before)
+    internal static bool RefreshChangedModels(IReadOnlyList<Slot> changed)
     {
-        foreach (var slot in before)
-        {
-            if (!TryCategory(slot.Category, out var category)) continue;
-            try { editor.SetCustomParts(slot.ItemId, category, slot.Index); }
-            catch (Exception ex) { Plugin.Logger.LogError("BDP PresetRollbackError " + ex); }
-        }
-    }
-
-    private static void RefreshChangedModels(IReadOnlyList<Slot> changed)
-    {
-        if (changed.Count == 0) return;
+        if (changed.Count == 0) return true;
+        bool succeeded = true;
         var shop = UnityEngine.Object.FindObjectOfType<BazaarMyShop>();
         if (shop == null)
         {
             Plugin.Logger.LogWarning("BDP PresetModelRefreshSkipped shop-unavailable");
-            return;
+            return false;
         }
 
         foreach (var slot in changed)
         {
             try
             {
-                if (!TryCategory(slot.Category, out var category)) continue;
+                if (!TryCategory(slot.Category, out var category)) { succeeded = false; continue; }
                 // This is the same model-replacement route the game uses after
                 // an accepted part change.  It only touches BazaarMyShop visuals.
                 shop.RefreshBazaarPartsModel(slot.ItemId, category, slot.Index, true, false);
             }
             catch (Exception ex)
             {
+                succeeded = false;
                 Plugin.Logger.LogWarning($"BDP PresetModelRefreshFailed {slot.Category}:{slot.Index} {ex.Message}");
             }
         }
+        return succeeded;
     }
-
-    private static bool SameLayout(IReadOnlyList<Slot> left, IReadOnlyList<Slot> right) =>
-        left.Count == right.Count && left.All(item => right.Any(other => item.Equals(other)));
 
     private static bool TryCategory(string value, out BazaarCustomItemData.PartsCategory category)
     {

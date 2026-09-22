@@ -15,6 +15,7 @@ internal static partial class NativePresetUi
     private static BazaarManager editor;
     private static UIManager uiManager;
     private static bool sessionActive;
+    private static bool loadRecoveryBlocked;
     private static UIBazaarCustomPage page;
     private static UIMenuFooter footer;
     private static UISelectDialog slotDialog;
@@ -43,6 +44,7 @@ internal static partial class NativePresetUi
     {
         generation++;
         SessionFaulted = false;
+        loadRecoveryBlocked = false;
         faultFooterRestored = false;
         dialogCloseTracker.Reset();
         editor = value;
@@ -120,8 +122,8 @@ internal static partial class NativePresetUi
     }
 
     internal static bool AppearanceBlocksPresets => TransmogBridge.BlocksPresets(IsAppearanceEditorVisible);
-    private static bool CanEnterPresetMenu => !SessionFaulted && Ready && !open && !AppearanceBlocksPresets && page.IsInputEnable();
-    internal static bool ShouldShowFooterGuide => !SessionFaulted && Ready && !open && !AppearanceBlocksPresets;
+    private static bool CanEnterPresetMenu => !SessionFaulted && !loadRecoveryBlocked && Ready && !open && !AppearanceBlocksPresets && page.IsInputEnable();
+    internal static bool ShouldShowFooterGuide => !SessionFaulted && !loadRecoveryBlocked && Ready && !open && !AppearanceBlocksPresets;
 
     internal static void Tick()
     {
@@ -224,7 +226,7 @@ internal static partial class NativePresetUi
     private static void OpenMainMenu()
     {
         var ui = GetUiManager();
-        if (SessionFaulted || !Ready || AppearanceBlocksPresets || (!open && !page.IsInputEnable()) || ui == null || ui.IsDialog) return;
+        if (SessionFaulted || loadRecoveryBlocked || !Ready || AppearanceBlocksPresets || (!open && !page.IsInputEnable()) || ui == null || ui.IsDialog) return;
         if (!open) CaptureEditorFooterGuide();
         open = true;
         slotMenuOpen = false;
@@ -311,27 +313,47 @@ internal static partial class NativePresetUi
     private static void Load()
     {
         var preset = PresetStorage.At(file, selectedSlot);
-        if (preset == null) OpenSlots();
-        else
+        if (preset == null) { OpenSlots(); return; }
+        List<Slot> beforeLoad, plan;
+        try
         {
-            // Apply owns a snapshot taken at this exact point and restores it
-            // on any mutation failure. It is intentionally not the layout at
-            // the start of the editor session.
-            var beforeLoad = Snapshot();
-            try
-            {
-                var plan = PresetApplicator.Plan(page, preset, beforeLoad);
-                PresetApplicator.Apply(editor, beforeLoad, plan, Snapshot);
-                Notice("presets.load.completed", FinishMenu);
-            }
-            catch (Exception ex)
-            {
-                Plugin.Logger.LogError("BDP PresetLoadError " + ex);
-                Notice("presets.load.failed", OpenSlots);
-            }
+            beforeLoad = Snapshot();
+            plan = PresetApplicator.Plan(page, preset, beforeLoad);
         }
-    }
+        catch (Exception ex)
+        {
+            Plugin.Logger.LogError("BDP PresetValidationError " + ex);
+            Notice("presets.load.rejected", OpenSlots);
+            return;
+        }
 
+        var result = PresetApplicator.Apply(editor, beforeLoad, plan, Snapshot);
+        if (result.Status == LayoutApplyStatus.RecoveryUnconfirmed)
+        {
+            // Keep the warning dialog operational; SessionFaulted would close it.
+            // The official editor still owns the user's final confirm/cancel.
+            loadRecoveryBlocked = true;
+        }
+        foreach (var error in result.Errors)
+            Plugin.Logger.LogError("BDP PresetApplyError " + error);
+        if (loadRecoveryBlocked)
+        {
+            Notice("presets.load.recovery.failed", FinishMenu);
+            return;
+        }
+
+        bool modelsUpdated;
+        try { modelsUpdated = PresetApplicator.RefreshChangedModels(result.ModelsToRefresh); }
+        catch (Exception ex)
+        {
+            Plugin.Logger.LogWarning("BDP PresetModelRefreshFailed " + ex);
+            modelsUpdated = false;
+        }
+        if (result.Status == LayoutApplyStatus.Restored)
+            Notice(modelsUpdated ? "presets.load.failed" : "presets.load.restored.visual.failed", OpenSlots);
+        else
+            Notice(modelsUpdated ? "presets.load.completed" : "presets.load.visual.failed", FinishMenu);
+    }
     private static void OpenDeleteConfirmation()
     {
         if (storageBlocked) { Notice("presets.storage.blocked", OpenSlots); return; }
